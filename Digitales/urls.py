@@ -1,4 +1,4 @@
-#Digitales/urls.py
+# Digitales/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
@@ -18,12 +18,18 @@ from .views import (
     contacto_updates,
     editar_mensaje_view,
     media_proxy_view,
-    generar_resumen_prospecto_view,
     plantillas_whatsapp_view,
 )
 
+
 router = DefaultRouter()
-router.register(r"prospectos", ProspectosViewSet, basename="prospectos")
+
+router.register(
+    r"prospectos",
+    ProspectosViewSet,
+    basename="prospectos",
+)
+
 
 urlpatterns = [
     path("bienvenido/", bienvenido),
@@ -34,6 +40,7 @@ urlpatterns = [
 
     path("chats/", chats_list),
     path("chats/mark-read/", mark_read_view),
+
     path("contacto/", contacto_por_telefono),
     path("contacto/updates/", contacto_updates),
 
@@ -43,8 +50,12 @@ urlpatterns = [
     path("mensajes/plantillas/", plantillas_whatsapp_view),
     path("mensajes/editar/", editar_mensaje_view),
 
-    path("api/", include(router.urls)),
     path("api/campanas-meta/", campanas_meta_recientes),
-    path("api/prospectos/<int:prospecto_id>/generar-resumen/", generar_resumen_prospecto_view),
-    path("media/<str:media_id>/", media_proxy_view, name="digitales-media-proxy"),
+    path("api/", include(router.urls)),
+
+    path(
+        "media/<str:media_id>/",
+        media_proxy_view,
+        name="digitales-media-proxy",
+    ),
 ]
