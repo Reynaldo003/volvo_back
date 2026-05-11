@@ -1,170 +1,17 @@
 # Digitales/serializers.py
-from datetime import timedelta
-
-from django.conf import settings
-from django.urls import reverse
-from django.utils import timezone
-
 from rest_framework import serializers
 
-from .models import ExpedienteDigital, MensajeWhatsApp
+from .models import ExpedienteDigital
 from citas.models import ClienteComercial, normaliza_tel_mx
 
 
-EDIT_WINDOW_MINUTES = 15
-
-
-def tel_normalizado_valido(tel):
-    tel = "".join(c for c in str(tel or "") if c.isdigit())
-    return len(tel) == 12 and tel.startswith("52")
-
-
-class WhatsAppMessageSerializer(serializers.ModelSerializer):
-    mine = serializers.SerializerMethodField()
-    text = serializers.CharField(source="body", read_only=True)
-    time = serializers.SerializerMethodField()
-
-    editable = serializers.SerializerMethodField()
-    edit_expires_at = serializers.SerializerMethodField()
-    is_template = serializers.SerializerMethodField()
-    is_media = serializers.SerializerMethodField()
-
-    attachments = serializers.SerializerMethodField()
-
-    class Meta:
-        model = MensajeWhatsApp
-        fields = [
-            "id",
-            "telefono",
-            "direction",
-            "mine",
-            "text",
-            "body",
-            "wa_message_id",
-            "status",
-            "raw",
-            "created_at",
-            "time",
-            "editable",
-            "edit_expires_at",
-            "is_template",
-            "is_media",
-            "attachments",
-        ]
-
-    def get_mine(self, obj):
-        return obj.direction == "out"
-
-    def get_time(self, obj):
-        if not obj.created_at:
-            return ""
-
-        dt = obj.created_at
-
-        if settings.USE_TZ and timezone.is_aware(dt):
-            dt = timezone.localtime(dt)
-
-        return dt.strftime("%I:%M %p").lower()
-
-    def get_is_template(self, obj):
-        body = (obj.body or "").strip()
-        return body.startswith("[TEMPLATE:")
-
-    def get_is_media(self, obj):
-        raw = obj.raw or {}
-
-        if isinstance(raw, dict):
-            if raw.get("meta_type") in ("image", "video", "audio", "document", "sticker"):
-                return True
-
-        body = (obj.body or "").strip()
-
-        return body.startswith("[FILE:") or "\n[FILE:" in body
-
-    def get_edit_expires_at(self, obj):
-        if not obj.created_at:
-            return None
-
-        return (obj.created_at + timedelta(minutes=EDIT_WINDOW_MINUTES)).isoformat()
-
-    def get_editable(self, obj):
-        if obj.direction != "out":
-            return False
-
-        if not obj.created_at:
-            return False
-
-        if self.get_is_template(obj):
-            return False
-
-        if self.get_is_media(obj):
-            return False
-
-        return timezone.now() <= (obj.created_at + timedelta(minutes=EDIT_WINDOW_MINUTES))
-
-    def _media_proxy_url(self, media_id, obj):
-        request = self.context.get("request")
-        path = reverse("digitales-media-proxy", args=[media_id])
-
-        numero_asesor = str(getattr(obj, "numero_asesor", "") or "").strip()
-
-        if numero_asesor:
-            path = f"{path}?numero_asesor={numero_asesor}"
-
-        return request.build_absolute_uri(path) if request else path
-
-    def get_attachments(self, obj):
-        raw = obj.raw or {}
-
-        if isinstance(raw, dict) and raw.get("upload") and raw.get("meta_type"):
-            media_id = (raw.get("upload") or {}).get("id") or ""
-
-            if media_id:
-                kind = raw.get("meta_type")
-                url = self._media_proxy_url(media_id, obj)
-
-                return [
-                    {
-                        "id": media_id,
-                        "kind": "file" if kind == "document" else kind,
-                        "url": url,
-                        "mime": raw.get("content_type") or "",
-                        "name": raw.get("filename") or "",
-                        "size": 0,
-                    }
-                ]
-
-        if isinstance(raw, dict):
-            tipo = (raw.get("type") or "").lower()
-
-            if tipo in ("image", "video", "audio", "document", "sticker"):
-                payload = raw.get(tipo) or {}
-                media_id = payload.get("id") or ""
-
-                if media_id:
-                    url = self._media_proxy_url(media_id, obj)
-                    name = payload.get("filename") or ""
-                    mime = payload.get("mime_type") or ""
-
-                    return [
-                        {
-                            "id": media_id,
-                            "kind": "sticker" if tipo == "sticker" else ("file" if tipo == "document" else tipo),
-                            "url": url,
-                            "mime": mime,
-                            "name": name,
-                            "size": 0,
-                        }
-                    ]
-
-        return []
-
-
 class ProspectoSerializer(serializers.ModelSerializer):
+    # Campos planos que recibe/envía el frontend
     nombre = serializers.CharField(write_only=True, required=False, allow_blank=True)
     telefono = serializers.CharField(write_only=True, required=True)
     correo = serializers.EmailField(write_only=True, required=False, allow_blank=True)
 
+    # Campos reales desde ClienteComercial
     nombre_out = serializers.CharField(source="cliente.nombre", read_only=True)
     telefono_out = serializers.CharField(source="cliente.telefono", read_only=True)
     correo_out = serializers.EmailField(source="cliente.correo", read_only=True)
@@ -177,44 +24,57 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "id",
             "cliente_id",
 
+            # Entrada manual
             "nombre",
             "telefono",
             "correo",
 
+            # Salida desde cliente
             "nombre_out",
             "telefono_out",
             "correo_out",
 
+            # Datos comerciales
             "agencia",
             "business",
             "canal_contacto",
             "pauta",
             "estado",
+            "auto_interes",
             "asesor_digital",
             "asesor_ventas",
-            "auto_interes",
             "comentarios",
 
+            # Campos de resumen se dejan por compatibilidad,
+            # aunque ahorita no uses IA.
+            "resumen",
+            "resumen_actualizado_at",
+            "resumen_fuente",
+
+            # Fechas / auditoría
             "primer_contacto_at",
             "ultimo_contacto_at",
             "last_read_at",
-
             "creado",
             "actualizado",
 
+            # Cita relacionada
+            "ultima_cita",
             "ultima_cita_agendada",
             "asistencia",
-            "ultima_cita",
         ]
 
         read_only_fields = [
             "id",
             "cliente_id",
+            "nombre_out",
+            "telefono_out",
+            "correo_out",
             "creado",
             "actualizado",
+            "ultima_cita",
             "ultima_cita_agendada",
             "asistencia",
-            "ultima_cita",
         ]
 
     def to_representation(self, instance):
@@ -226,36 +86,35 @@ class ProspectoSerializer(serializers.ModelSerializer):
 
         return data
 
-    def _get_or_create_cliente(self, tel, nombre="", correo=""):
-        tel = normaliza_tel_mx(tel)
+    def _get_or_create_cliente(self, telefono, nombre="", correo=""):
+        telefono = normaliza_tel_mx(telefono)
 
-        if not tel:
-            raise serializers.ValidationError(
-                {
-                    "telefono": "Teléfono inválido.",
-                }
-            )
+        if not telefono:
+            raise serializers.ValidationError({
+                "telefono": "Teléfono inválido. Debe tener 10 dígitos o 12 dígitos iniciando con 52."
+            })
 
         cliente, _ = ClienteComercial.objects.get_or_create(
-            telefono=tel,
+            telefono=telefono,
             defaults={
                 "nombre": (nombre or "").strip(),
                 "correo": (correo or "").strip(),
             },
         )
 
-        changed = False
+        cambios = []
 
-        if nombre and nombre.strip() and (cliente.nombre or "").strip() != nombre.strip():
+        if nombre and nombre.strip() and cliente.nombre != nombre.strip():
             cliente.nombre = nombre.strip()
-            changed = True
+            cambios.append("nombre")
 
-        if correo is not None and (cliente.correo or "").strip() != (correo or "").strip():
+        if correo is not None and cliente.correo != (correo or "").strip():
             cliente.correo = (correo or "").strip()
-            changed = True
+            cambios.append("correo")
 
-        if changed:
-            cliente.save(update_fields=["nombre", "correo", "actualizado_en"])
+        if cambios:
+            cambios.append("actualizado_en")
+            cliente.save(update_fields=cambios)
 
         return cliente
 
@@ -264,22 +123,26 @@ class ProspectoSerializer(serializers.ModelSerializer):
         telefono = validated_data.pop("telefono", "")
         correo = validated_data.pop("correo", "")
 
-        cliente = self._get_or_create_cliente(telefono, nombre, correo)
+        cliente = self._get_or_create_cliente(
+            telefono=telefono,
+            nombre=nombre,
+            correo=correo,
+        )
 
-        expediente, created = ExpedienteDigital.objects.get_or_create(
+        if not validated_data.get("canal_contacto"):
+            validated_data["canal_contacto"] = "Manual"
+
+        if not validated_data.get("estado"):
+            validated_data["estado"] = "Nuevo"
+
+        expediente, creado = ExpedienteDigital.objects.get_or_create(
             cliente=cliente,
             defaults=validated_data,
         )
 
-        if not created:
-            for key, value in validated_data.items():
-                if value is None:
-                    continue
-
-                if isinstance(value, str) and not value.strip():
-                    continue
-
-                setattr(expediente, key, value)
+        if not creado:
+            for campo, valor in validated_data.items():
+                setattr(expediente, campo, valor)
 
             expediente.save()
 
@@ -290,45 +153,47 @@ class ProspectoSerializer(serializers.ModelSerializer):
         telefono = validated_data.pop("telefono", None)
         correo = validated_data.pop("correo", None)
 
-        if telefono is not None:
-            nuevo_tel = normaliza_tel_mx(telefono)
-            tel_anterior = instance.cliente.telefono
+        cliente = instance.cliente
+        cambios_cliente = []
 
-            if not nuevo_tel:
-                raise serializers.ValidationError(
-                    {
-                        "telefono": "Teléfono inválido. Debe ser de 10 dígitos o 12 iniciando con 52.",
-                    }
+        if telefono is not None:
+            telefono_normalizado = normaliza_tel_mx(telefono)
+
+            if not telefono_normalizado:
+                raise serializers.ValidationError({
+                    "telefono": "Teléfono inválido. Debe tener 10 dígitos o 12 dígitos iniciando con 52."
+                })
+
+            if telefono_normalizado != cliente.telefono:
+                telefono_ocupado = (
+                    ClienteComercial.objects
+                    .filter(telefono=telefono_normalizado)
+                    .exclude(id_cliente=cliente.id_cliente)
+                    .exists()
                 )
 
-            if nuevo_tel != tel_anterior:
-                if tel_normalizado_valido(tel_anterior):
-                    raise serializers.ValidationError(
-                        {
-                            "telefono": "No se permite cambiar un teléfono válido desde aquí. Solo corrección de teléfonos inválidos.",
-                        }
-                    )
+                if telefono_ocupado:
+                    raise serializers.ValidationError({
+                        "telefono": "Ya existe otro prospecto con este teléfono."
+                    })
 
-                instance.cliente.telefono = nuevo_tel
-                instance.cliente.save(update_fields=["telefono", "actualizado_en"])
+                cliente.telefono = telefono_normalizado
+                cambios_cliente.append("telefono")
 
-        if nombre is not None or correo is not None:
-            cliente = instance.cliente
-            changed = False
+        if nombre is not None and nombre.strip() and cliente.nombre != nombre.strip():
+            cliente.nombre = nombre.strip()
+            cambios_cliente.append("nombre")
 
-            if nombre is not None and nombre.strip():
-                cliente.nombre = nombre.strip()
-                changed = True
+        if correo is not None and cliente.correo != (correo or "").strip():
+            cliente.correo = (correo or "").strip()
+            cambios_cliente.append("correo")
 
-            if correo is not None:
-                cliente.correo = (correo or "").strip()
-                changed = True
+        if cambios_cliente:
+            cambios_cliente.append("actualizado_en")
+            cliente.save(update_fields=cambios_cliente)
 
-            if changed:
-                cliente.save(update_fields=["nombre", "correo", "actualizado_en"])
-
-        for key, value in validated_data.items():
-            setattr(instance, key, value)
+        for campo, valor in validated_data.items():
+            setattr(instance, campo, valor)
 
         instance.save()
 
