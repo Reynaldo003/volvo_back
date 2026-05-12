@@ -23,6 +23,7 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "trafico-piso-volvo.vercel.app",
+    "concertacion-citas-volvo.vercel.app",
 ]
 
 
@@ -207,6 +208,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://trafico-piso-volvo.vercel.app",
+    "https://concertacion-citas-volvo.vercel.app",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -218,6 +220,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://trafico-piso-volvo.vercel.app",
+    "https://concertacion-citas-volvo.vercel.app",
 ]
 
 
