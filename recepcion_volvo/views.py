@@ -31,7 +31,7 @@ from .models import RecepcionVolvo
 from .serializers import RecepcionVolvoSerializer
 
 
-VOLVO_BLUE = colors.HexColor("#001C48")
+VOLVO_BLUE = colors.HexColor("#212721")
 VOLVO_BLUE_2 = colors.HexColor("#0B2C5F")
 VOLVO_GRAY = colors.HexColor("#64748B")
 VOLVO_LIGHT = colors.HexColor("#F4F7FA")
