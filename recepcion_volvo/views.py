@@ -31,8 +31,12 @@ from usuarios.authentication import SignedUserAuthentication
 from .models import RecepcionVolvo
 from .serializers import RecepcionVolvoSerializer
 
+
+# ============================================================
+# COLORES VOLVO
+# ============================================================
+
 VOLVO_MAIN = colors.HexColor("#212721")
-VOLVO_DARK = colors.HexColor("#212721")
 VOLVO_GRAY = colors.HexColor("#64748B")
 VOLVO_LIGHT = colors.HexColor("#F4F7FA")
 VOLVO_BORDER = colors.HexColor("#CBD5E1")
@@ -41,9 +45,10 @@ VOLVO_SOFT = colors.HexColor("#EEF2F1")
 WHITE = colors.white
 BLACK = colors.HexColor("#0F172A")
 
-# Compatibilidad con nombres anteriores.
-VOLVO_BLUE = VOLVO_MAIN
-VOLVO_BLUE_2 = VOLVO_DARK
+
+# ============================================================
+# CHECKLIST VOLVO
+# ============================================================
 
 CHECKLIST_VOLVO = [
     {
@@ -103,6 +108,11 @@ CHECKLIST_VOLVO = [
     },
 ]
 
+
+# ============================================================
+# PERMISOS / TEXTO / FECHAS
+# ============================================================
+
 def normalizar_rol(request):
     return str(getattr(request.user, "rol", "") or "").strip().lower()
 
@@ -146,11 +156,7 @@ def texto_pdf(valor, default="—"):
     return escape(texto(valor, default)).replace("\n", "<br/>")
 
 
-def parrafo(valor, estilo, default="—"):
-    return Paragraph(texto_pdf(valor, default), estilo)
-
-
-def recortar(valor, limite=70, default=""):
+def recortar(valor, limite=90, default=""):
     valor = "" if valor is None else str(valor).strip()
 
     if not valor:
@@ -165,7 +171,7 @@ def recortar(valor, limite=70, default=""):
 def estado_label(valor):
     mapa = {
         "ok": "Correcto",
-        "observacion": "Con observación",
+        "observacion": "Observación",
         "na": "N/A",
     }
 
@@ -173,7 +179,7 @@ def estado_label(valor):
 
 
 def color_estado(estado):
-    estado = str(estado or "").lower()
+    estado = str(estado or "").strip().lower()
 
     if estado == "ok":
         return colors.HexColor("#D1FAE5")
@@ -185,6 +191,11 @@ def color_estado(estado):
         return colors.HexColor("#E5E7EB")
 
     return VOLVO_LIGHT
+
+
+# ============================================================
+# LOGO
+# ============================================================
 
 def ruta_logo_volvo():
     rutas_base = []
@@ -213,7 +224,7 @@ def ruta_logo_volvo():
     return None
 
 
-def crear_logo_pdf(path, max_width_cm=3.6, max_height_cm=0.85):
+def crear_logo_pdf(path, max_width_cm=3.8, max_height_cm=1.05):
     if not path or not os.path.exists(path):
         return Paragraph("", ParagraphStyle(name="LogoVacio"))
 
@@ -233,86 +244,88 @@ def crear_logo_pdf(path, max_width_cm=3.6, max_height_cm=0.85):
 
     return img
 
+
+# ============================================================
+# ESTILOS PDF
+# ============================================================
+
 def estilos_pdf():
     return {
         "titulo": ParagraphStyle(
             name="Titulo",
             fontName="Helvetica-Bold",
-            fontSize=11,
-            leading=12,
+            fontSize=14,
+            leading=15.5,
             textColor=VOLVO_MAIN,
-            alignment=TA_RIGHT,
-        ),
-        "subtitulo": ParagraphStyle(
-            name="Subtitulo",
-            fontName="Helvetica",
-            fontSize=6.5,
-            leading=7.2,
-            textColor=VOLVO_GRAY,
             alignment=TA_RIGHT,
         ),
         "mini": ParagraphStyle(
             name="Mini",
             fontName="Helvetica",
-            fontSize=5.8,
-            leading=6.4,
+            fontSize=7,
+            leading=8,
             textColor=VOLVO_GRAY,
             alignment=TA_RIGHT,
         ),
         "seccion": ParagraphStyle(
             name="Seccion",
             fontName="Helvetica-Bold",
-            fontSize=5.8,
-            leading=6.3,
+            fontSize=7.2,
+            leading=8.2,
             textColor=WHITE,
             alignment=TA_LEFT,
         ),
         "th": ParagraphStyle(
             name="TableHeader",
             fontName="Helvetica-Bold",
-            fontSize=5.2,
-            leading=5.8,
+            fontSize=6.6,
+            leading=7.3,
             textColor=WHITE,
             alignment=TA_CENTER,
         ),
         "label": ParagraphStyle(
             name="Label",
             fontName="Helvetica-Bold",
-            fontSize=5.5,
-            leading=6.2,
+            fontSize=6.4,
+            leading=7.2,
             textColor=BLACK,
         ),
         "value": ParagraphStyle(
             name="Value",
             fontName="Helvetica",
-            fontSize=5.5,
-            leading=6.2,
+            fontSize=6.4,
+            leading=7.2,
             textColor=BLACK,
         ),
         "item": ParagraphStyle(
             name="Item",
             fontName="Helvetica",
-            fontSize=4.9,
-            leading=5.45,
+            fontSize=6.25,
+            leading=7.05,
             textColor=BLACK,
         ),
         "estado": ParagraphStyle(
             name="Estado",
             fontName="Helvetica-Bold",
-            fontSize=4.8,
-            leading=5.4,
+            fontSize=6.1,
+            leading=6.9,
             textColor=BLACK,
             alignment=TA_CENTER,
         ),
         "firma": ParagraphStyle(
             name="Firma",
             fontName="Helvetica-Bold",
-            fontSize=5.2,
-            leading=5.9,
+            fontSize=6.1,
+            leading=7,
             textColor=BLACK,
             alignment=TA_CENTER,
         ),
     }
+
+
+# ============================================================
+# PDF BASE
+# ============================================================
 
 def fondo_pdf(canvas, doc):
     ancho, alto = doc.pagesize
@@ -323,7 +336,7 @@ def fondo_pdf(canvas, doc):
     canvas.rect(0, 0, ancho, alto, stroke=0, fill=1)
 
     canvas.setStrokeColor(VOLVO_MAIN)
-    canvas.setLineWidth(0.75)
+    canvas.setLineWidth(0.8)
     canvas.roundRect(
         0.28 * cm,
         0.28 * cm,
@@ -334,10 +347,10 @@ def fondo_pdf(canvas, doc):
         fill=0,
     )
 
-    canvas.setFont("Helvetica", 5.5)
+    canvas.setFont("Helvetica", 6)
     canvas.setFillColor(VOLVO_GRAY)
     canvas.drawRightString(
-        ancho - 0.50 * cm,
+        ancho - 0.55 * cm,
         0.35 * cm,
         "Checklist de recepción Volvo",
     )
@@ -351,10 +364,10 @@ def pdf_response(story, filename):
     doc = SimpleDocTemplate(
         buffer,
         pagesize=letter,
-        rightMargin=0.42 * cm,
-        leftMargin=0.42 * cm,
-        topMargin=0.42 * cm,
-        bottomMargin=0.42 * cm,
+        rightMargin=0.50 * cm,
+        leftMargin=0.50 * cm,
+        topMargin=0.50 * cm,
+        bottomMargin=0.50 * cm,
     )
 
     doc.build(story, onFirstPage=fondo_pdf)
@@ -365,9 +378,14 @@ def pdf_response(story, filename):
     response["Content-Disposition"] = f'inline; filename="{filename}"'
     return response
 
+
+# ============================================================
+# BLOQUES PDF
+# ============================================================
+
 def header_pdf(recepcion, estilos):
     logo_path = ruta_logo_volvo()
-    logo = crear_logo_pdf(logo_path, max_width_cm=3.7, max_height_cm=0.82)
+    logo = crear_logo_pdf(logo_path, max_width_cm=3.8, max_height_cm=1.0)
 
     derecha = [
         Paragraph("CHECKLIST DE RECEPCIÓN DE VEHÍCULO", estilos["titulo"]),
@@ -379,13 +397,13 @@ def header_pdf(recepcion, estilos):
 
     t = Table(
         [[logo, derecha]],
-        colWidths=[5.0 * cm, 15.0 * cm],
+        colWidths=[4.4 * cm, 15.2 * cm],
     )
 
     t.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LINEBELOW", (0, 0), (-1, -1), 0.75, VOLVO_MAIN),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.8, VOLVO_MAIN),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("TOPPADDING", (0, 0), (-1, -1), 0),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
@@ -400,11 +418,11 @@ def tabla_datos_generales(recepcion, estilos):
     data = [
         [
             Paragraph("Cliente", estilos["label"]),
-            Paragraph(texto_pdf(recortar(getattr(cliente, "nombre", ""), 34)), estilos["value"]),
+            Paragraph(texto_pdf(recortar(getattr(cliente, "nombre", ""), 38)), estilos["value"]),
             Paragraph("Teléfono", estilos["label"]),
             Paragraph(texto_pdf(getattr(cliente, "telefono", "")), estilos["value"]),
             Paragraph("Correo", estilos["label"]),
-            Paragraph(texto_pdf(recortar(getattr(cliente, "correo", ""), 32)), estilos["value"]),
+            Paragraph(texto_pdf(recortar(getattr(cliente, "correo", ""), 34)), estilos["value"]),
         ],
         [
             Paragraph("Contacto", estilos["label"]),
@@ -418,9 +436,9 @@ def tabla_datos_generales(recepcion, estilos):
             Paragraph("Placas", estilos["label"]),
             Paragraph(texto_pdf(recepcion.placas), estilos["value"]),
             Paragraph("VIN", estilos["label"]),
-            Paragraph(texto_pdf(recortar(recepcion.vin, 22)), estilos["value"]),
+            Paragraph(texto_pdf(recortar(recepcion.vin, 28)), estilos["value"]),
             Paragraph("Modelo", estilos["label"]),
-            Paragraph(texto_pdf(recortar(recepcion.modelo, 28)), estilos["value"]),
+            Paragraph(texto_pdf(recortar(recepcion.modelo, 30)), estilos["value"]),
         ],
         [
             Paragraph("Kilometraje", estilos["label"]),
@@ -438,15 +456,15 @@ def tabla_datos_generales(recepcion, estilos):
     t = Table(
         data,
         colWidths=[
-            1.7 * cm, 5.0 * cm,
-            1.7 * cm, 4.1 * cm,
-            1.7 * cm, 5.8 * cm,
+            1.8 * cm, 4.9 * cm,
+            1.8 * cm, 4.0 * cm,
+            1.8 * cm, 5.3 * cm,
         ],
     )
 
     t.setStyle(TableStyle([
-        ("BOX", (0, 0), (-1, -1), 0.30, VOLVO_BORDER),
-        ("INNERGRID", (0, 0), (-1, -1), 0.18, VOLVO_BORDER),
+        ("BOX", (0, 0), (-1, -1), 0.35, VOLVO_BORDER),
+        ("INNERGRID", (0, 0), (-1, -1), 0.20, VOLVO_BORDER),
 
         ("BACKGROUND", (0, 0), (0, -1), VOLVO_SOFT),
         ("BACKGROUND", (2, 0), (2, -1), VOLVO_SOFT),
@@ -454,159 +472,103 @@ def tabla_datos_generales(recepcion, estilos):
 
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
 
-        ("LEFTPADDING", (0, 0), (-1, -1), 2),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-        ("TOPPADDING", (0, 0), (-1, -1), 1.3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 1.3),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
 
     return t
 
 
-def tabla_checklist_seccion(titulo, items, checklist, estilos, ancho_cm=9.72):
-    rows = [
-        [
-            Paragraph(escape(titulo), estilos["seccion"]),
+def tabla_checklist(recepcion, estilos):
+    checklist = recepcion.checklist or {}
+
+    if not isinstance(checklist, dict):
+        checklist = {}
+
+    rows = []
+
+    for seccion in CHECKLIST_VOLVO:
+        rows.append([
+            Paragraph(escape(seccion["titulo"]), estilos["seccion"]),
             "",
             "",
-        ],
-        [
+        ])
+
+        rows.append([
             Paragraph("Punto de revisión", estilos["th"]),
             Paragraph("Estado", estilos["th"]),
             Paragraph("Comentario", estilos["th"]),
-        ],
-    ]
-
-    for item_id, descripcion in items:
-        valor = checklist.get(item_id, {}) if isinstance(checklist, dict) else {}
-
-        estado = valor.get("estado", "") if isinstance(valor, dict) else ""
-        comentario = valor.get("comentario", "") if isinstance(valor, dict) else ""
-
-        rows.append([
-            Paragraph(escape(descripcion), estilos["item"]),
-            Paragraph(escape(estado_label(estado)), estilos["estado"]),
-            Paragraph(texto_pdf(recortar(comentario, 32), ""), estilos["item"]),
         ])
+
+        for item_id, descripcion in seccion["items"]:
+            valor = checklist.get(item_id, {}) if isinstance(checklist, dict) else {}
+
+            estado = valor.get("estado", "") if isinstance(valor, dict) else ""
+            comentario = valor.get("comentario", "") if isinstance(valor, dict) else ""
+
+            rows.append([
+                Paragraph(escape(descripcion), estilos["item"]),
+                Paragraph(escape(estado_label(estado)), estilos["estado"]),
+                Paragraph(texto_pdf(recortar(comentario, 90), ""), estilos["item"]),
+            ])
 
     t = Table(
         rows,
         colWidths=[
-            (ancho_cm - 3.80) * cm,
-            1.55 * cm,
-            2.25 * cm,
+            11.8 * cm,
+            2.4 * cm,
+            5.4 * cm,
         ],
+        repeatRows=0,
     )
 
     style = [
-        ("SPAN", (0, 0), (-1, 0)),
-        ("BACKGROUND", (0, 0), (-1, 0), VOLVO_MAIN),
-        ("BACKGROUND", (0, 1), (-1, 1), VOLVO_MAIN),
-
-        ("BOX", (0, 0), (-1, -1), 0.28, VOLVO_BORDER),
-        ("INNERGRID", (0, 1), (-1, -1), 0.16, VOLVO_BORDER),
-
+        ("BOX", (0, 0), (-1, -1), 0.35, VOLVO_BORDER),
+        ("INNERGRID", (0, 0), (-1, -1), 0.18, VOLVO_BORDER),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
 
-        ("LEFTPADDING", (0, 0), (-1, -1), 2),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-        ("TOPPADDING", (0, 0), (-1, -1), 1.35),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 1.35),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
 
-        ("ALIGN", (1, 2), (1, -1), "CENTER"),
+        ("ALIGN", (1, 0), (1, -1), "CENTER"),
     ]
 
-    row_index = 2
+    row_index = 0
 
-    for item_id, _descripcion in items:
-        valor = checklist.get(item_id, {}) if isinstance(checklist, dict) else {}
-        estado = valor.get("estado", "") if isinstance(valor, dict) else ""
+    for seccion in CHECKLIST_VOLVO:
+        style.extend([
+            ("SPAN", (0, row_index), (-1, row_index)),
+            ("BACKGROUND", (0, row_index), (-1, row_index), VOLVO_MAIN),
+            ("TEXTCOLOR", (0, row_index), (-1, row_index), WHITE),
+        ])
 
-        style.append(("BACKGROUND", (1, row_index), (1, row_index), color_estado(estado)))
         row_index += 1
+
+        style.extend([
+            ("BACKGROUND", (0, row_index), (-1, row_index), VOLVO_MAIN),
+            ("TEXTCOLOR", (0, row_index), (-1, row_index), WHITE),
+        ])
+
+        row_index += 1
+
+        for item_id, _descripcion in seccion["items"]:
+            valor = checklist.get(item_id, {}) if isinstance(checklist, dict) else {}
+            estado = valor.get("estado", "") if isinstance(valor, dict) else ""
+
+            style.append(("BACKGROUND", (1, row_index), (1, row_index), color_estado(estado)))
+
+            row_index += 1
 
     t.setStyle(TableStyle(style))
 
     return t
 
 
-def columna_checklist(secciones, checklist, estilos):
-    flow = []
-
-    for index, seccion in enumerate(secciones):
-        if index > 0:
-            flow.append(Spacer(1, 2.2))
-
-        flow.append(
-            tabla_checklist_seccion(
-                seccion["titulo"],
-                seccion["items"],
-                checklist,
-                estilos,
-                ancho_cm=9.72,
-            )
-        )
-
-    return flow
-
-
-def bloque_checklist_dos_columnas(recepcion, estilos):
-    checklist = recepcion.checklist or {}
-
-    if not isinstance(checklist, dict):
-        checklist = {}
-    izquierda = CHECKLIST_VOLVO[:2]
-    derecha = CHECKLIST_VOLVO[2:]
-
-    left_flow = columna_checklist(izquierda, checklist, estilos)
-    right_flow = columna_checklist(derecha, checklist, estilos)
-
-    t = Table(
-        [[left_flow, "", right_flow]],
-        colWidths=[9.72 * cm, 0.56 * cm, 9.72 * cm],
-    )
-
-    t.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-    ]))
-
-    return t
-
-
-def firmas(estilos):
-    t = Table(
-        [
-            ["", "", ""],
-            [
-                Paragraph("ASESOR DE SERVICIO<br/><font size='4.5'>Nombre y firma</font>", estilos["firma"]),
-                Paragraph("CLIENTE<br/><font size='4.5'>Nombre y firma</font>", estilos["firma"]),
-                Paragraph("TÉCNICO / RECEPCIÓN<br/><font size='4.5'>Nombre y firma</font>", estilos["firma"]),
-            ],
-        ],
-        colWidths=[3.05 * cm, 3.05 * cm, 3.05 * cm],
-        rowHeights=[0.38 * cm, 0.42 * cm],
-    )
-
-    t.setStyle(TableStyle([
-        ("LINEABOVE", (0, 1), (0, 1), 0.60, BLACK),
-        ("LINEABOVE", (1, 1), (1, 1), 0.60, BLACK),
-        ("LINEABOVE", (2, 1), (2, 1), 0.60, BLACK),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 1), (-1, 1), 1.5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-    ]))
-
-    return t
-
-
-def bloque_observaciones_y_firmas(recepcion, estilos):
+def bloque_observaciones(recepcion, estilos):
     obs = Table(
         [
             [
@@ -614,35 +576,51 @@ def bloque_observaciones_y_firmas(recepcion, estilos):
             ],
             [
                 Paragraph(
-                    texto_pdf(recortar(recepcion.observaciones, 170), "Sin observaciones."),
+                    texto_pdf(recortar(recepcion.observaciones, 360), "Sin observaciones."),
                     estilos["value"],
                 ),
             ],
         ],
-        colWidths=[10.45 * cm],
-        rowHeights=[0.32 * cm, 0.86 * cm],
+        colWidths=[19.6 * cm],
+        rowHeights=[0.40 * cm, 1.15 * cm],
     )
 
     obs.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), VOLVO_MAIN),
-        ("BOX", (0, 0), (-1, -1), 0.28, VOLVO_BORDER),
+        ("BOX", (0, 0), (-1, -1), 0.35, VOLVO_BORDER),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 3),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-        ("TOPPADDING", (0, 0), (-1, -1), 1.5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 1.5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
 
+    return obs
+
+
+def firmas(estilos):
     t = Table(
-        [[obs, "", firmas(estilos)]],
-        colWidths=[10.45 * cm, 0.40 * cm, 9.15 * cm],
+        [
+            ["", "", ""],
+            [
+                Paragraph("ASESOR DE SERVICIO<br/><font size='5'>Nombre y firma</font>", estilos["firma"]),
+                Paragraph("CLIENTE<br/><font size='5'>Nombre y firma</font>", estilos["firma"]),
+                Paragraph("TÉCNICO / RECEPCIÓN<br/><font size='5'>Nombre y firma</font>", estilos["firma"]),
+            ],
+        ],
+        colWidths=[6.25 * cm, 6.25 * cm, 6.25 * cm],
+        rowHeights=[0.55 * cm, 0.55 * cm],
     )
 
     t.setStyle(TableStyle([
+        ("LINEABOVE", (0, 1), (0, 1), 0.70, BLACK),
+        ("LINEABOVE", (1, 1), (1, 1), 0.70, BLACK),
+        ("LINEABOVE", (2, 1), (2, 1), 0.70, BLACK),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 1), (-1, 1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
 
@@ -655,22 +633,23 @@ def generar_pdf_recepcion_volvo(recepcion):
     contenido = []
 
     contenido.append(header_pdf(recepcion, estilos))
-    contenido.append(Spacer(1, 3))
+    contenido.append(Spacer(1, 5))
 
     contenido.append(tabla_datos_generales(recepcion, estilos))
-    contenido.append(Spacer(1, 4))
+    contenido.append(Spacer(1, 6))
 
-    contenido.append(bloque_checklist_dos_columnas(recepcion, estilos))
-    contenido.append(Spacer(1, 4))
+    contenido.append(tabla_checklist(recepcion, estilos))
+    contenido.append(Spacer(1, 7))
 
-    contenido.append(bloque_observaciones_y_firmas(recepcion, estilos))
+    contenido.append(bloque_observaciones(recepcion, estilos))
+    contenido.append(Spacer(1, 9))
 
-    # Este KeepInFrame ayuda a mantener todo en una sola hoja.
-    # Si algún comentario o texto crece demasiado, ReportLab compacta el contenido.
+    contenido.append(firmas(estilos))
+
     story = [
         KeepInFrame(
-            maxWidth=20.05 * cm,
-            maxHeight=26.55 * cm,
+            maxWidth=19.7 * cm,
+            maxHeight=26.45 * cm,
             content=contenido,
             mode="shrink",
             hAlign="CENTER",
@@ -682,6 +661,11 @@ def generar_pdf_recepcion_volvo(recepcion):
         story,
         f"checklist_recepcion_volvo_{recepcion.id}.pdf",
     )
+
+
+# ============================================================
+# VIEWSET
+# ============================================================
 
 class RecepcionVolvoViewSet(viewsets.ModelViewSet):
     authentication_classes = [SignedUserAuthentication]
