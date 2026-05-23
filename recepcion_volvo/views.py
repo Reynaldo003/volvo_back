@@ -321,7 +321,15 @@ def barra_seccion(titulo, estilos):
 def tabla_datos(filas, estilos):
     data = []
 
-    for e1, v1, e2, v2 in filas:
+    for fila in filas:
+        if len(fila) == 4:
+            e1, v1, e2, v2 = fila
+        elif len(fila) == 2:
+            e1, v1 = fila
+            e2, v2 = "", ""
+        else:
+            continue
+
         data.append([
             parrafo(e1, estilos["label"]),
             parrafo(v1, estilos["value"]),
@@ -347,7 +355,6 @@ def tabla_datos(filas, estilos):
     ]))
 
     return t
-
 
 def color_estado(estado):
     estado = str(estado or "").lower()
@@ -517,21 +524,41 @@ def generar_pdf_recepcion_volvo(recepcion):
 
     story.append(barra_seccion("DATOS DEL CLIENTE", estilos))
     story.append(tabla_datos([
-        ("Cliente", getattr(cliente, "nombre", "")),
-        ("Teléfono", getattr(cliente, "telefono", "")),
-        ("Correo", getattr(cliente, "correo", "")),
-        ("Contacto preferido", recepcion.get_metodo_contacto_preferido_display()),
+        (
+            "Cliente",
+            getattr(cliente, "nombre", ""),
+            "Teléfono",
+            getattr(cliente, "telefono", ""),
+        ),
+        (
+            "Correo",
+            getattr(cliente, "correo", ""),
+            "Contacto preferido",
+            recepcion.get_metodo_contacto_preferido_display(),
+        ),
     ], estilos))
     story.append(Spacer(1, 8))
 
     story.append(barra_seccion("DATOS DEL VEHÍCULO", estilos))
     story.append(tabla_datos([
-        ("Placas", recepcion.placas),
-        ("VIN", recepcion.vin),
-        ("Modelo", recepcion.modelo),
-        ("Kilometraje", recepcion.kilometraje),
-        ("Recepción", fecha_local(recepcion.fecha_hora_recepcion)),
-        ("Asesor", recepcion.asesor_servicio),
+        (
+            "Placas",
+            recepcion.placas,
+            "VIN",
+            recepcion.vin,
+        ),
+        (
+            "Modelo",
+            recepcion.modelo,
+            "Kilometraje",
+            recepcion.kilometraje,
+        ),
+        (
+            "Recepción",
+            fecha_local(recepcion.fecha_hora_recepcion),
+            "Asesor",
+            recepcion.asesor_servicio,
+        ),
     ], estilos))
     story.append(Spacer(1, 8))
 
