@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     "citas.apps.CitasConfig",
     "Digitales",
     "trafico_piso",
+    "recepcion_volvo",
 ]
 
 

@@ -5,7 +5,6 @@ from django.contrib import admin
 from django.http import JsonResponse
 from django.urls import include, path
 
-
 def health_check(request):
     return JsonResponse(
         {
@@ -15,22 +14,15 @@ def health_check(request):
         }
     )
 
-
 urlpatterns = [
     path("", health_check, name="health-check"),
     path("admin/", admin.site.urls),
-
-    # Auth / usuarios
     path("usuarios/", include("usuarios.urls")),
-
-    # Gestión comercial
     path("citas/", include("citas.urls")),
     path("trafico-piso/", include("trafico_piso.urls")),
-
-    # Digitales / WhatsApp
     path("digitales/", include("Digitales.urls")),
+    path("recepcion-volvo/", include("recepcion_volvo.urls")),
 ]
-
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
