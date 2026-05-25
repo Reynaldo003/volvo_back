@@ -22,6 +22,8 @@ urlpatterns = [
     path("trafico-piso/", include("trafico_piso.urls")),
     path("digitales/", include("Digitales.urls")),
     path("recepcion-volvo/", include("recepcion_volvo.urls")),
+    path("checklist-entrega/", include("checklist_entrega.urls")),
+    path("checklist-general/", include("checklist_general.urls")),
 ]
 
 if settings.DEBUG:
