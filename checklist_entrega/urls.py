@@ -1,11 +1,10 @@
-#recepcion_volvo/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from .views import RecepcionVolvoViewSet
+from .views import ChecklistEntregaVehiculoViewSet
 
 router = DefaultRouter()
-router.register(r"recepciones", RecepcionVolvoViewSet, basename="recepciones-volvo")
+router.register(r"entregas", ChecklistEntregaVehiculoViewSet, basename="checklist-entrega")
 
 urlpatterns = [
     path("api/", include(router.urls)),

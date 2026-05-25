@@ -58,6 +58,8 @@ INSTALLED_APPS = [
     "Digitales",
     "trafico_piso",
     "recepcion_volvo",
+    "checklist_entrega",
+    "checklist_general",
 ]
 
 
