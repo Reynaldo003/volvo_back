@@ -386,10 +386,6 @@ def generar_pdf_checklist_general(obj):
     story = [
         header_pdf(obj, estilos),
         Spacer(1, 5),
-        Paragraph(
-            "Objetivo: garantizar entrega con calidad, seguridad y conformidad total del cliente, evitando retrabajos, reclamaciones y fallas posteriores.",
-            estilos["nota"],
-        ),
         Spacer(1, 5),
         tabla_datos_generales(obj, estilos),
         Spacer(1, 6),

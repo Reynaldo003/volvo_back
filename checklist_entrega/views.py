@@ -360,10 +360,6 @@ def generar_pdf_checklist_entrega(entrega):
     story = [
         header_pdf(entrega, estilos),
         Spacer(1, 5),
-        Paragraph(
-            "La explicación técnica al cliente es obligatoria. La unidad no debe entregarse sin registrar comprensión, conformidad y documentación final.",
-            estilos["nota"],
-        ),
         Spacer(1, 5),
         tabla_datos_generales(entrega, estilos),
         Spacer(1, 6),
