@@ -24,6 +24,9 @@ ALLOWED_HOSTS = [
     "127.0.0.1",
     "trafico-piso-volvo.vercel.app",
     "concertacion-citas-volvo.vercel.app",
+    "checklist-recepcion-volvo.vercel.app",
+    "checklist-entrega-volvo.vercel.app",
+    "checklist-calidad-general.vercel.app",
 ]
 
 
@@ -212,6 +215,9 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "https://trafico-piso-volvo.vercel.app",
     "https://concertacion-citas-volvo.vercel.app",
+    "https://checklist-recepcion-volvo.vercel.app",
+    "https://checklist-entrega-volvo.vercel.app",
+    "https://checklist-calidad-general.vercel.app",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -224,6 +230,9 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:5173",
     "https://trafico-piso-volvo.vercel.app",
     "https://concertacion-citas-volvo.vercel.app",
+    "https://checklist-recepcion-volvo.vercel.app",
+    "https://checklist-entrega-volvo.vercel.app",
+    "https://checklist-calidad-general.vercel.app",
 ]
 
 

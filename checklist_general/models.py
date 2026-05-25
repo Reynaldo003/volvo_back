@@ -1,3 +1,4 @@
+#checklist_general/models.py
 from pathlib import Path
 import uuid
 

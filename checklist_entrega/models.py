@@ -1,3 +1,4 @@
+#checklist_entrega/models.py
 from pathlib import Path
 import uuid
 

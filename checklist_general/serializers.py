@@ -1,3 +1,4 @@
+#checklist_general/serializers.py
 import json
 
 from django.db import transaction
