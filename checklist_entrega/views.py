@@ -18,7 +18,7 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
 
 from usuarios.authentication import SignedUserAuthentication
 from .constants import (
@@ -328,6 +328,172 @@ def bloque_observaciones(entrega, estilos):
     ]))
     return t
 
+EXTENSIONES_IMAGEN_PDF = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".bmp",
+    ".webp",
+}
+
+EXTENSIONES_VIDEO = {
+    ".mp4",
+    ".mov",
+    ".avi",
+    ".mkv",
+    ".webm",
+    ".3gp",
+    ".m4v",
+}
+
+
+def obtener_extension_archivo(archivo):
+    nombre = str(getattr(archivo, "name", "") or "").lower()
+    return os.path.splitext(nombre)[1]
+
+
+def es_video_evidencia(evidencia):
+    archivo = getattr(evidencia, "archivo", None)
+    if not archivo:
+        return False
+
+    extension = obtener_extension_archivo(archivo)
+    return extension in EXTENSIONES_VIDEO
+
+
+def es_imagen_evidencia_para_pdf(evidencia):
+    archivo = getattr(evidencia, "archivo", None)
+    if not archivo:
+        return False
+
+    extension = obtener_extension_archivo(archivo)
+
+    if extension in EXTENSIONES_VIDEO:
+        return False
+
+    return extension in EXTENSIONES_IMAGEN_PDF
+
+
+def ruta_archivo_evidencia(evidencia):
+    archivo = getattr(evidencia, "archivo", None)
+    if not archivo:
+        return ""
+
+    try:
+        ruta = archivo.path
+    except Exception:
+        return ""
+
+    return ruta if ruta and os.path.exists(ruta) else ""
+
+
+def crear_imagen_evidencia_pdf(path, max_width_cm=8.7, max_height_cm=6.2):
+    if not path or not os.path.exists(path):
+        return None
+
+    try:
+        img = Image(path)
+
+        ancho_original = float(img.imageWidth or 1)
+        alto_original = float(img.imageHeight or 1)
+
+        max_w = max_width_cm * cm
+        max_h = max_height_cm * cm
+
+        factor = min(max_w / ancho_original, max_h / alto_original)
+
+        img.drawWidth = ancho_original * factor
+        img.drawHeight = alto_original * factor
+        img.hAlign = "CENTER"
+
+        return img
+    except Exception:
+        return None
+
+
+def bloque_evidencias_pdf(entrega, estilos):
+    evidencias = []
+
+    for evidencia in entrega.evidencias.all().order_by("creado"):
+        if not es_imagen_evidencia_para_pdf(evidencia):
+            continue
+
+        ruta = ruta_archivo_evidencia(evidencia)
+        if not ruta:
+            continue
+
+        imagen = crear_imagen_evidencia_pdf(ruta)
+        if not imagen:
+            continue
+
+        evidencias.append((evidencia, imagen))
+
+    if not evidencias:
+        return []
+
+    elementos = [
+        PageBreak(),
+        Table(
+            [[Paragraph("EVIDENCIAS FOTOGRÁFICAS", estilos["th"])]],
+            colWidths=[19.6 * cm],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), VOLVO_MAIN),
+                ("BOX", (0, 0), (-1, -1), 0.35, VOLVO_BORDER),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]),
+        ),
+        Spacer(1, 8),
+    ]
+
+    filas = []
+    fila_actual = []
+
+    for index, (evidencia, imagen) in enumerate(evidencias, start=1):
+        descripcion = texto_pdf(recortar(evidencia.descripcion, 120), "")
+
+        titulo = f"Evidencia {index}"
+        if descripcion:
+            titulo += f"<br/><font size='6'>{descripcion}</font>"
+
+        celda = [
+            imagen,
+            Spacer(1, 4),
+            Paragraph(titulo, estilos["firma"]),
+        ]
+
+        fila_actual.append(celda)
+
+        if len(fila_actual) == 2:
+            filas.append(fila_actual)
+            fila_actual = []
+
+    if fila_actual:
+        fila_actual.append("")
+        filas.append(fila_actual)
+
+    tabla = Table(
+        filas,
+        colWidths=[9.65 * cm, 9.65 * cm],
+    )
+
+    tabla.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.35, VOLVO_BORDER),
+        ("INNERGRID", (0, 0), (-1, -1), 0.20, VOLVO_BORDER),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+
+    elementos.append(tabla)
+
+    return elementos
 
 def firmas(estilos):
     t = Table(
@@ -355,9 +521,9 @@ def firmas(estilos):
     ]))
     return t
 
-
 def generar_pdf_checklist_entrega(entrega):
     estilos = estilos_pdf()
+
     story = [
         header_pdf(entrega, estilos),
         Spacer(1, 5),
@@ -370,8 +536,10 @@ def generar_pdf_checklist_entrega(entrega):
         Spacer(1, 12),
         firmas(estilos),
     ]
-    return pdf_response(story, f"checklist_entrega_vehiculo_{entrega.id}.pdf")
 
+    story.extend(bloque_evidencias_pdf(entrega, estilos))
+
+    return pdf_response(story, f"checklist_entrega_vehiculo_{entrega.id}.pdf")
 
 def validar_entrega_para_cierre(entrega):
     checklist = entrega.checklist or {}
