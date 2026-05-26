@@ -230,9 +230,15 @@ class ChecklistGeneralCalidadSerializer(serializers.ModelSerializer):
             if archivo.size > 50 * 1024 * 1024:
                 raise serializers.ValidationError({"evidencias_nuevas": f"El archivo {archivo.name} supera 50MB."})
             content_type = getattr(archivo, "content_type", "") or ""
-            if not content_type.startswith("image/"):
-                raise serializers.ValidationError({"evidencias_nuevas": "Solo se permiten imágenes."})
 
+            es_imagen = content_type.startswith("image/")
+            es_video = content_type.startswith("video/")
+
+            if not es_imagen and not es_video:
+                raise serializers.ValidationError({
+                    "evidencias_nuevas": "Solo se permiten imágenes o videos."
+                })
+            
         raw_checklist = None
         raw_existentes = None
         raw_desc_nuevas = None
