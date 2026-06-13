@@ -31,7 +31,7 @@ WHATSAPP_LINES = {
         "access_token": whatsapp_token,
         "asesor_digital": "Mariana Tlamani",
         "messages_url": whatsapp_url_mariana,
-        "agencia": "Volvo Suecia Car Angelopolis",
+        "agencia": "Volvo",
         "business": "Nuevos",
         "responder_ia": False,
         "template_names": ["saludo_seguimiento",],
