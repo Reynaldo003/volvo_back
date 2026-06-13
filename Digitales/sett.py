@@ -1,14 +1,14 @@
 #Digitales/sett.py
-token = 'CBAR&RVOLKS'
-whatsapp_token = 'EAAS1RWxgIcIBP8LS2l1ZAmUz4BjZCufH0VUVQCS4KQhAbAPFQtHtsbgZAVZBF8W1HjFbwur6qtN3KokHoZBY2qpZA24MafOc2bnc1SuXVK2EWT2qsGVnE4oltrQyFOYPN9rEwXFd1ZAHYvPktu7HlsoYThbThNHRwHR6PdkN8TfgZBJWEAMb1VnJsdSYSXRKegZDZD'
+token = 'PBAR&RVOLVO'
+whatsapp_token = 'EAAOw8lmcSSEBRni7VfZCjzFapQI2szs6GNaImaXQqXDbVYJqjGPZBrVGHPme6GG1LHWECkBwyQXZA1m1MfIFkuVMssZCyDwwi3KiUbPk0McRZB1KQuVFtKPsgiH4QRrHI9CycW219FNKIg4SvTwYtR96NZA6Qe4xBqLqkH6bgjQgmnSLOaXm5QLwzsc6IY8VkLXgZDZD'
 
 GRAPH_VERSION = "v22.0"
 WHATSAPP_WABA_ID_DEFAULT = "TU_WHATSAPP_BUSINESS_ACCOUNT_ID"
 
-whatsapp_url_mariana = 'https://graph.facebook.com/v22.0//messages'
+whatsapp_url_mariana = 'https://graph.facebook.com/v22.0/1209013795622558/messages'
 
 whatsapp_numero_default = "52"
-whatsapp_numero_mariana = "52"
+whatsapp_numero_mariana = "522211092815"
 
 WHATSAPP_LINES = {
     #whatsapp_numero_default: {
@@ -25,16 +25,16 @@ WHATSAPP_LINES = {
     #},
 
     whatsapp_numero_mariana: {
-        "key": "liz",
-        "phone_number_id": "1002516582953413",
-        "waba_id": "1448342956973453",
+        "key": "mariana",
+        "phone_number_id": "1209013795622558",
+        "waba_id": "1520374786158708",
         "access_token": whatsapp_token,
-        "asesor_digital": "Lizbeth Cano Clara",
+        "asesor_digital": "Mariana Tlamani",
         "messages_url": whatsapp_url_mariana,
-        "agencia": "VW Orizaba",
+        "agencia": "Volvo Suecia Car Angelopolis",
         "business": "Nuevos",
         "responder_ia": False,
-        "template_names": ["saludo_seguimiento", "confirmacion_cita", "informacion_seguimiento"],
+        "template_names": ["saludo_seguimiento",],
     },
 }
 
