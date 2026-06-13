@@ -7,7 +7,7 @@ WHATSAPP_WABA_ID_DEFAULT = "TU_WHATSAPP_BUSINESS_ACCOUNT_ID"
 
 whatsapp_url_mariana = 'https://graph.facebook.com/v22.0/1209013795622558/messages'
 
-whatsapp_numero_default = "52"
+#whatsapp_numero_default = "52"
 whatsapp_numero_mariana = "522211092815"
 
 WHATSAPP_LINES = {
@@ -42,7 +42,6 @@ WHATSAPP_PHONE_ID_TO_NUMBER = {
     str(cfg["phone_number_id"]): numero
     for numero, cfg in WHATSAPP_LINES.items()
 }
-
 WHATSAPP_TEMPLATE_UI = {
     "saludo_seguimiento": {
         "title": "Saludo de seguimiento",

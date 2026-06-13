@@ -1915,8 +1915,9 @@ def _procesar_mensajes_webhook(
 
     for msg in messages or []:
         message_id = str(msg.get("id") or "").strip()
-        from_tel = normaliza_tel_mx(msg.get("from") or "")
-
+        raw_from = msg.get("from") or ""
+        from_tel = normaliza_tel_mx(replace_start(raw_from))
+        
         if not from_tel:
             continue
 
