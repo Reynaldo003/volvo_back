@@ -893,15 +893,13 @@ def contacto_por_telefono(request):
 
     limit = max(1, min(limit, 80))
 
-    try:
-        days = int(request.query_params.get("days") or 0)
-    except (TypeError, ValueError):
-        days = 0
-
     before_id = str(request.query_params.get("before_id") or "").strip()
-    mark_read = _bool_query_param(request, "mark_read", default=True)
+
+    mark_read_raw = str(request.query_params.get("mark_read", "1")).strip().lower()
+    mark_read = mark_read_raw not in ("0", "false", "no", "off")
 
     cliente = ClienteComercial.objects.filter(telefono=telefono).first()
+
     expediente = (
         ExpedienteDigital.objects
         .select_related("cliente")
@@ -916,18 +914,21 @@ def contacto_por_telefono(request):
         numero_asesor=numero_asesor,
     )
 
-    if days > 0:
-        mensajes_qs = mensajes_qs.filter(
-            created_at__gte=timezone.now() - timedelta(days=days)
+    if before_id:
+        mensaje_referencia = (
+            mensajes_qs
+            .filter(id=before_id)
+            .only("id", "created_at")
+            .first()
         )
 
-    if before_id:
-        ref = mensajes_qs.filter(id=before_id).only("id", "created_at").first()
-
-        if ref:
+        if mensaje_referencia:
             mensajes_qs = mensajes_qs.filter(
-                Q(created_at__lt=ref.created_at)
-                | Q(created_at=ref.created_at, id__lt=ref.id)
+                Q(created_at__lt=mensaje_referencia.created_at)
+                | Q(
+                    created_at=mensaje_referencia.created_at,
+                    id__lt=mensaje_referencia.id,
+                )
             )
 
     mensajes_desc = list(
