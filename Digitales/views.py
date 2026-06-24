@@ -1,3 +1,4 @@
+#volvo
 # Digitales/views.py
 import json
 import logging
@@ -241,6 +242,75 @@ def _cfg_linea(numero_asesor: str) -> dict:
 def _now():
     return timezone.now()
 
+def _get_or_create_lectura(exp: ExpedienteDigital, numero_asesor: str) -> LecturaWhatsApp:
+    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+
+    lectura, _ = LecturaWhatsApp.objects.get_or_create(
+        expediente=exp,
+        numero_asesor=numero_asesor,
+    )
+
+    return lectura
+
+
+def _mark_read_exp(exp: ExpedienteDigital, numero_asesor: str, when=None):
+    """
+    Marca como leído un chat para una línea específica de WhatsApp.
+
+    Importante:
+    - expediente.last_read_at queda como compatibilidad legacy.
+    - LecturaWhatsApp es la fuente correcta por línea.
+    """
+    if not exp:
+        return None
+
+    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+    when = when or timezone.now()
+
+    exp.last_read_at = when
+    exp.save(update_fields=["last_read_at", "actualizado"])
+
+    lectura = _get_or_create_lectura(exp, numero_asesor)
+    lectura.last_read_at = when
+    lectura.save(update_fields=["last_read_at", "updated_at"])
+
+    return when
+
+
+def _unread_count(exp: ExpedienteDigital, numero_asesor: str) -> int:
+    """
+    Cuenta mensajes entrantes no leídos para una línea específica.
+    """
+    if not exp or not exp.cliente_id:
+        return 0
+
+    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+
+    qs = MensajeWhatsApp.objects.filter(
+        telefono=exp.cliente.telefono,
+        numero_asesor=numero_asesor,
+        direction="in",
+    )
+
+    lectura = LecturaWhatsApp.objects.filter(
+        expediente=exp,
+        numero_asesor=numero_asesor,
+    ).first()
+
+    if lectura:
+        last_read_at = lectura.last_read_at
+    else:
+        last_read_at = exp.last_read_at
+
+    if last_read_at:
+        qs = qs.filter(created_at__gt=last_read_at)
+
+    return qs.count()
+
+
+def _bool_query_param(request, name: str, default: bool = False) -> bool:
+    raw = str(request.query_params.get(name, "1" if default else "0")).strip().lower()
+    return raw not in ("0", "false", "no", "off", "")
 
 def _format_time(dt):
     if not dt:
@@ -762,30 +832,14 @@ def chats_list(request):
         if not nombre:
             nombre = "Prospecto"
 
-        last_read_at = None
-
         if expediente:
-            lectura = (
-                LecturaWhatsApp.objects
-                .filter(expediente=expediente, numero_asesor=numero_asesor)
-                .first()
-            )
-
-            if lectura and lectura.last_read_at:
-                last_read_at = lectura.last_read_at
-            elif expediente.last_read_at:
-                last_read_at = expediente.last_read_at
-
-        unread_qs = MensajeWhatsApp.objects.filter(
-            telefono=tel,
-            numero_asesor=numero_asesor,
-            direction="in",
-        )
-
-        if last_read_at:
-            unread_qs = unread_qs.filter(created_at__gt=last_read_at)
-
-        unread = unread_qs.count()
+            unread = _unread_count(expediente, numero_asesor)
+        else:
+            unread = MensajeWhatsApp.objects.filter(
+                telefono=tel,
+                numero_asesor=numero_asesor,
+                direction="in",
+            ).count()
 
         salida.append(
             {
@@ -806,7 +860,6 @@ def chats_list(request):
             break
 
     return Response(salida, status=status.HTTP_200_OK)
-
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
@@ -833,13 +886,30 @@ def contacto_por_telefono(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    limit = int(request.query_params.get("limit") or 80)
-    limit = max(1, min(limit, 200))
+    try:
+        limit = int(request.query_params.get("limit") or 24)
+    except (TypeError, ValueError):
+        limit = 24
 
-    days = int(request.query_params.get("days") or 0)
+    limit = max(1, min(limit, 80))
+
+    try:
+        days = int(request.query_params.get("days") or 0)
+    except (TypeError, ValueError):
+        days = 0
+
+    before_id = str(request.query_params.get("before_id") or "").strip()
+    mark_read = _bool_query_param(request, "mark_read", default=True)
 
     cliente = ClienteComercial.objects.filter(telefono=telefono).first()
-    expediente = ExpedienteDigital.objects.filter(cliente=cliente).first() if cliente else None
+    expediente = (
+        ExpedienteDigital.objects
+        .select_related("cliente")
+        .filter(cliente=cliente)
+        .first()
+        if cliente
+        else None
+    )
 
     mensajes_qs = MensajeWhatsApp.objects.filter(
         telefono=telefono,
@@ -851,27 +921,53 @@ def contacto_por_telefono(request):
             created_at__gte=timezone.now() - timedelta(days=days)
         )
 
-    mensajes = list(
+    if before_id:
+        ref = mensajes_qs.filter(id=before_id).only("id", "created_at").first()
+
+        if ref:
+            mensajes_qs = mensajes_qs.filter(
+                Q(created_at__lt=ref.created_at)
+                | Q(created_at=ref.created_at, id__lt=ref.id)
+            )
+
+    mensajes_desc = list(
         mensajes_qs
         .select_related("cliente")
-        .order_by("-created_at", "-id")[:limit]
+        .order_by("-created_at", "-id")[:limit + 1]
     )
 
-    mensajes.reverse()
+    has_more = len(mensajes_desc) > limit
+    mensajes_desc = mensajes_desc[:limit]
+    mensajes = list(reversed(mensajes_desc))
+
+    if expediente and not before_id and mark_read:
+        _mark_read_exp(expediente, numero_asesor)
+
+    oldest_id = mensajes[0].id if mensajes else None
+    newest_id = mensajes[-1].id if mensajes else None
 
     return Response(
         {
             "ok": True,
             "numero_asesor": numero_asesor,
+            "numero_asesor_activo": numero_asesor,
             "prospecto": ProspectoSerializer(expediente).data if expediente else None,
             "mensajes": [
                 _serializar_mensaje(mensaje, request=request)
                 for mensaje in mensajes
             ],
+            "paginacion": {
+                "limit": limit,
+                "has_more": has_more,
+                "oldest_id": oldest_id,
+                "newest_id": newest_id,
+                "before_id": oldest_id,
+                "oldest_created_at": mensajes[0].created_at.isoformat() if mensajes else None,
+                "newest_created_at": mensajes[-1].created_at.isoformat() if mensajes else None,
+            },
         },
         status=status.HTTP_200_OK,
     )
-
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
@@ -900,7 +996,13 @@ def contacto_updates(request):
 
     after = (request.query_params.get("after") or "").strip()
     after_id = (request.query_params.get("after_id") or "").strip()
-    limit = int(request.query_params.get("limit") or 80)
+    mark_read = _bool_query_param(request, "mark_read", default=False)
+
+    try:
+        limit = int(request.query_params.get("limit") or 80)
+    except (TypeError, ValueError):
+        limit = 80
+
     limit = max(1, min(limit, 200))
 
     qs = MensajeWhatsApp.objects.filter(
@@ -908,17 +1010,25 @@ def contacto_updates(request):
         numero_asesor=numero_asesor,
     )
 
-    if after:
-        parsed = parse_datetime(after)
+    parsed = parse_datetime(after) if after else None
 
-        if parsed:
-            if timezone.is_naive(parsed):
-                parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    if parsed:
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
 
+        if after_id and after_id.isdigit():
+            qs = qs.filter(
+                Q(created_at__gt=parsed)
+                | Q(created_at=parsed, id__gt=int(after_id))
+            )
+        else:
             qs = qs.filter(created_at__gt=parsed)
 
-    if after_id and after_id.isdigit():
+    elif after_id and after_id.isdigit():
         qs = qs.filter(id__gt=int(after_id))
+
+    else:
+        qs = qs.none()
 
     mensajes = list(
         qs
@@ -926,18 +1036,26 @@ def contacto_updates(request):
         .order_by("created_at", "id")[:limit]
     )
 
+    if mark_read:
+        cliente = ClienteComercial.objects.filter(telefono=telefono).first()
+        expediente = ExpedienteDigital.objects.filter(cliente=cliente).first() if cliente else None
+
+        if expediente:
+            _mark_read_exp(expediente, numero_asesor)
+
     return Response(
         {
             "ok": True,
             "numero_asesor": numero_asesor,
+            "numero_asesor_activo": numero_asesor,
             "mensajes": [
                 _serializar_mensaje(mensaje, request=request)
                 for mensaje in mensajes
             ],
+            "server_now": timezone.now().isoformat(),
         },
         status=status.HTTP_200_OK,
     )
-
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -972,33 +1090,34 @@ def mark_read_view(request):
     cliente = ClienteComercial.objects.filter(telefono=telefono).first()
 
     if not cliente:
-        return Response({"ok": True}, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "ok": False,
+                "error": "No existe prospecto para ese teléfono.",
+            },
+            status=status.HTTP_404_NOT_FOUND,
+        )
 
     expediente = ExpedienteDigital.objects.filter(cliente=cliente).first()
 
     if not expediente:
-        return Response({"ok": True}, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "ok": False,
+                "error": "No existe expediente para ese teléfono.",
+            },
+            status=status.HTTP_404_NOT_FOUND,
+        )
 
-    when = timezone.now()
-
-    expediente.last_read_at = when
-    expediente.save(update_fields=["last_read_at", "actualizado"])
-
-    lectura, _ = LecturaWhatsApp.objects.get_or_create(
-        expediente=expediente,
-        numero_asesor=numero_asesor,
-    )
-
-    lectura.touch(when=when)
+    when = _mark_read_exp(expediente, numero_asesor)
 
     return Response(
         {
             "ok": True,
-            "last_read_at": when.isoformat(),
+            "last_read_at": when.isoformat() if when else None,
         },
         status=status.HTTP_200_OK,
     )
-
 
 # ============================================================
 # Envío de mensajes
@@ -2035,3 +2154,61 @@ def webhook(request):
     except Exception:
         logger.exception("ERROR PROCESANDO WEBHOOK VOLVO")
         return HttpResponse("ok", content_type="text/plain")
+    
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def mark_unread_view(request):
+    try:
+        numero_asesor = _get_numero_asesor_request(request)
+    except Exception as e:
+        return Response(
+            {
+                "ok": False,
+                "error": str(e),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    telefono = normaliza_tel_mx(
+        request.data.get("tel")
+        or request.data.get("telefono")
+        or request.query_params.get("tel")
+        or ""
+    )
+
+    if not telefono:
+        return Response(
+            {
+                "ok": False,
+                "error": "Falta tel.",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    cliente = ClienteComercial.objects.filter(telefono=telefono).first()
+
+    if not cliente:
+        return Response(
+            {
+                "ok": False,
+                "error": "No existe prospecto para ese teléfono.",
+            },
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    expediente = ExpedienteDigital.objects.filter(cliente=cliente).first()
+
+    if not expediente:
+        return Response(
+            {
+                "ok": False,
+                "error": "No existe expediente para ese teléfono.",
+            },
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    lectura = _get_or_create_lectura(expediente, numero_asesor)
+    lectura.last_read_at = None
+    lectura.save(update_fields=["last_read_at", "updated_at"])
+
+    return Response({"ok": True}, status=status.HTTP_200_OK)

@@ -1,3 +1,4 @@
+#volvo
 # Digitales/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
@@ -19,6 +20,7 @@ from .views import (
     editar_mensaje_view,
     media_proxy_view,
     plantillas_whatsapp_view,
+    mark_unread_view,
 )
 
 
@@ -53,9 +55,6 @@ urlpatterns = [
     path("api/campanas-meta/", campanas_meta_recientes),
     path("api/", include(router.urls)),
 
-    path(
-        "media/<str:media_id>/",
-        media_proxy_view,
-        name="digitales-media-proxy",
-    ),
+    path("media/<str:media_id>/",media_proxy_view,name="digitales-media-proxy",),
+    path("chats/mark-unread/", mark_unread_view),
 ]
