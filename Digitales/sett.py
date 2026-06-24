@@ -35,7 +35,7 @@ WHATSAPP_LINES = {
         "agencia": "Volvo",
         "business": "Nuevos",
         "responder_ia": False,
-        "template_names": ["saludo_seguimiento",],
+        "template_names": ["confirmacion_prueba",],
     },
 }
 
@@ -44,13 +44,19 @@ WHATSAPP_PHONE_ID_TO_NUMBER = {
     for numero, cfg in WHATSAPP_LINES.items()
 }
 WHATSAPP_TEMPLATE_UI = {
-    "saludo_seguimiento": {
-        "title": "Saludo de seguimiento",
+    "confirmacion_prueba": {
+        "title": "Confirmacion Prueba",
         "help": "",
         "labels": {
-            "body_1": "Nombre del prospecto",
-            "body_2": "Interés del prospecto",
-            "body_3": "Acción de seguimiento",
+            "body_1": "fecha",
+            "body_2": "hora",
+        },
+    },
+    "prospecto_salesforce": {
+        "title": "",
+        "help": "",
+        "labels": {
+            "body_1": "nombre",
         },
     },
 }
