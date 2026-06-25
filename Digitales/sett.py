@@ -35,7 +35,7 @@ WHATSAPP_LINES = {
         "agencia": "Volvo",
         "business": "Nuevos",
         "responder_ia": False,
-        "template_names": ["confirmacion_prueba", "prospectos_salesforce_solicitud", "prospectos_salesforce_testdrive"],
+        "template_names": ["confirmacion_prueba", "prospectos_salesforce_solicitud", "prospectos_salesforce_testdrive", "2do_contacto_cotizacion_salesforce"],
     },
 }
 
@@ -44,7 +44,7 @@ WHATSAPP_PHONE_ID_TO_NUMBER = {
     for numero, cfg in WHATSAPP_LINES.items()
 }
 WHATSAPP_TEMPLATE_UI = {
-    "confirmacion_prueba": {
+    "confirmacion_prueba_manejo": {
         "title": "Confirmación Prueba",
         "help": "",
         "labels": {
@@ -65,8 +65,7 @@ WHATSAPP_TEMPLATE_UI = {
         },
     },
 
-    "prospectos_salesforce_testdrive": {
-        "title": "Test Drive Salesforce",
+    "2do_contacto_cotizacion_salesforce": {
         "help": "",
         "labels": {
             "body_1": "nombre",
