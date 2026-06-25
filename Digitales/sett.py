@@ -45,23 +45,28 @@ WHATSAPP_PHONE_ID_TO_NUMBER = {
 }
 WHATSAPP_TEMPLATE_UI = {
     "confirmacion_prueba": {
-        "title": "Confirmacion Prueba",
+        "title": "Confirmación Prueba",
         "help": "",
         "labels": {
             "body_1": "fecha",
             "body_2": "hora",
         },
     },
+
     "prospectos_salesforce_solicitud": {
-        "title": "",
+        "title": "Solicitud Salesforce",
         "help": "",
         "labels": {
             "body_1": "nombre",
         },
+        "header": {
+            "type": "image",
+            "link": "https://crmvolvo.grupoautomotrizryr.com/media/plantillas/salesforce_solicitud.jpeg",
+        },
     },
-    
+
     "prospectos_salesforce_testdrive": {
-        "title": "",
+        "title": "Test Drive Salesforce",
         "help": "",
         "labels": {
             "body_1": "nombre",

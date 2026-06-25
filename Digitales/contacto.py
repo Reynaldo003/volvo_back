@@ -601,6 +601,20 @@ def enviar_template_whatsapp(
     idioma: str = DEFAULT_IDIOMA,
     components: list[dict] | None = None,
 ) -> dict:
+    """
+    Envía una plantilla de WhatsApp Cloud API.
+
+    Soporta:
+    - Plantillas solo con BODY dinámico usando params=[...].
+    - Plantillas con components completos enviados desde el frontend.
+    - Plantillas con HEADER multimedia configurado en WHATSAPP_TEMPLATE_UI.
+
+    Nota importante:
+    Si en Meta la plantilla tiene HEADER tipo IMAGE/VIDEO/DOCUMENT,
+    Meta exige enviar ese HEADER dentro de template.components al momento
+    del envío. Si no se manda, Meta responde errores como:
+    "header: Format mismatch, expected IMAGE, received UNKNOWN".
+    """
     if not to:
         raise ValueError("Falta número destino")
 
@@ -609,19 +623,102 @@ def enviar_template_whatsapp(
 
     cfg = obtener_config_linea(numero_asesor=numero_asesor)
     idioma = (idioma or DEFAULT_IDIOMA).strip()
+    params = params or []
 
-    template_payload = {
-        "name": template_name,
-        "language": {
-            "code": idioma,
-        },
-    }
+    ui_config = {}
 
-    if components:
-        norm_components = []
+    if isinstance(WHATSAPP_TEMPLATE_UI, dict):
+        ui_config = WHATSAPP_TEMPLATE_UI.get(template_name, {}) or {}
 
-        for component in components:
-            ctype = str(component.get("type", "")).lower().strip()
+    def _texto(value) -> str:
+        return str(value or "").strip()
+
+    def _normalizar_parametro(parametro: dict) -> dict | None:
+        if not isinstance(parametro, dict):
+            return None
+
+        ptype = _texto(parametro.get("type")).lower()
+
+        if not ptype:
+            return None
+
+        if ptype == "text":
+            return {
+                "type": "text",
+                "text": str(parametro.get("text") or ""),
+            }
+
+        if ptype in ("image", "video", "document"):
+            media_payload = parametro.get(ptype) or {}
+
+            if not isinstance(media_payload, dict):
+                return None
+
+            media_id = _texto(media_payload.get("id"))
+            link = _texto(media_payload.get("link") or media_payload.get("url"))
+
+            if not media_id and not link:
+                return None
+
+            media_final = {"id": media_id} if media_id else {"link": link}
+
+            filename = _texto(
+                media_payload.get("filename")
+                or media_payload.get("name")
+            )
+
+            if ptype == "document" and filename:
+                media_final["filename"] = filename
+
+            return {
+                "type": ptype,
+                ptype: media_final,
+            }
+
+        if ptype == "currency":
+            currency = parametro.get("currency") or {}
+
+            if isinstance(currency, dict):
+                return {
+                    "type": "currency",
+                    "currency": currency,
+                }
+
+            return None
+
+        if ptype == "date_time":
+            date_time = parametro.get("date_time") or {}
+
+            if isinstance(date_time, dict):
+                return {
+                    "type": "date_time",
+                    "date_time": date_time,
+                }
+
+            return None
+
+        if ptype == "payload":
+            return {
+                "type": "payload",
+                "payload": str(parametro.get("payload") or ""),
+            }
+
+        # Fallback conservador para no romper parámetros nuevos de Meta.
+        salida = dict(parametro)
+        salida["type"] = ptype
+        return salida
+
+    def _normalizar_componentes(raw_components) -> list[dict]:
+        salida = []
+
+        if not isinstance(raw_components, list):
+            return salida
+
+        for component in raw_components:
+            if not isinstance(component, dict):
+                continue
+
+            ctype = _texto(component.get("type")).lower()
 
             if ctype == "buttons":
                 ctype = "button"
@@ -633,33 +730,151 @@ def enviar_template_whatsapp(
                 "type": ctype,
             }
 
-            if "parameters" in component:
-                item["parameters"] = component["parameters"]
+            parametros = component.get("parameters")
 
-            if "sub_type" in component:
-                item["sub_type"] = component["sub_type"]
+            if isinstance(parametros, list):
+                parametros_normalizados = []
 
-            if "index" in component:
-                item["index"] = component["index"]
+                for parametro in parametros:
+                    normalizado = _normalizar_parametro(parametro)
 
-            norm_components.append(item)
+                    if normalizado:
+                        parametros_normalizados.append(normalizado)
 
-        if norm_components:
-            template_payload["components"] = norm_components
+                if parametros_normalizados:
+                    item["parameters"] = parametros_normalizados
 
-    elif params:
-        template_payload["components"] = [
-            {
-                "type": "body",
-                "parameters": [
-                    {
-                        "type": "text",
-                        "text": str(value),
-                    }
-                    for value in params
-                ],
-            }
+            sub_type = _texto(component.get("sub_type"))
+            index = component.get("index")
+
+            if sub_type:
+                item["sub_type"] = sub_type
+
+            if index is not None and str(index).strip() != "":
+                item["index"] = str(index)
+
+            salida.append(item)
+
+        return salida
+
+    def _body_component_desde_params(valores: list) -> dict | None:
+        valores_limpios = [str(value) for value in (valores or [])]
+
+        if not valores_limpios:
+            return None
+
+        return {
+            "type": "body",
+            "parameters": [
+                {
+                    "type": "text",
+                    "text": value,
+                }
+                for value in valores_limpios
+            ],
+        }
+
+    def _header_media_desde_config() -> dict | None:
+        if not isinstance(ui_config, dict):
+            return None
+
+        header_cfg = ui_config.get("header") or ui_config.get("media_header") or {}
+
+        if not isinstance(header_cfg, dict):
+            header_cfg = {}
+
+        # Compatibilidad con llaves simples.
+        if not header_cfg:
+            if ui_config.get("header_image_link") or ui_config.get("header_image_id"):
+                header_cfg = {
+                    "type": "image",
+                    "link": ui_config.get("header_image_link"),
+                    "id": ui_config.get("header_image_id"),
+                }
+            elif ui_config.get("header_video_link") or ui_config.get("header_video_id"):
+                header_cfg = {
+                    "type": "video",
+                    "link": ui_config.get("header_video_link"),
+                    "id": ui_config.get("header_video_id"),
+                }
+            elif ui_config.get("header_document_link") or ui_config.get("header_document_id"):
+                header_cfg = {
+                    "type": "document",
+                    "link": ui_config.get("header_document_link"),
+                    "id": ui_config.get("header_document_id"),
+                    "filename": ui_config.get("header_document_filename"),
+                }
+
+        if not header_cfg:
+            return None
+
+        media_type = _texto(
+            header_cfg.get("type")
+            or header_cfg.get("media_type")
+            or header_cfg.get("format")
+        ).lower()
+
+        if media_type in ("imagen", "photo", "picture"):
+            media_type = "image"
+
+        if media_type not in ("image", "video", "document"):
+            return None
+
+        media_id = _texto(header_cfg.get("id") or header_cfg.get("media_id"))
+        link = _texto(header_cfg.get("link") or header_cfg.get("url"))
+
+        if not media_id and not link:
+            raise ValueError(
+                f"La plantilla '{template_name}' requiere HEADER {media_type.upper()}, "
+                "pero no tiene configurado 'id' ni 'link' en WHATSAPP_TEMPLATE_UI."
+            )
+
+        media_final = {"id": media_id} if media_id else {"link": link}
+
+        filename = _texto(header_cfg.get("filename") or header_cfg.get("name"))
+
+        if media_type == "document" and filename:
+            media_final["filename"] = filename
+
+        return {
+            "type": "header",
+            "parameters": [
+                {
+                    "type": media_type,
+                    media_type: media_final,
+                }
+            ],
+        }
+
+    componentes_finales = _normalizar_componentes(components)
+
+    if not componentes_finales:
+        body_component = _body_component_desde_params(params)
+
+        if body_component:
+            componentes_finales.append(body_component)
+
+    header_media = _header_media_desde_config()
+
+    if header_media:
+        componentes_finales = [
+            header_media,
+            *[
+                component
+                for component in componentes_finales
+                if component.get("type") != "header"
+            ],
         ]
+
+    template_payload = {
+        "name": template_name,
+        "language": {
+            "code": idioma,
+        },
+    }
+
+    if componentes_finales:
+        template_payload["components"] = componentes_finales
 
     payload = {
         "messaging_product": "whatsapp",
@@ -669,7 +884,6 @@ def enviar_template_whatsapp(
     }
 
     return _post_messages_api(cfg, payload)
-
 
 def subir_media_whatsapp(
     file_obj,
