@@ -35,7 +35,7 @@ WHATSAPP_LINES = {
         "agencia": "Volvo",
         "business": "Nuevos",
         "responder_ia": False,
-        "template_names": ["confirmacion_prueba", "prospectos_salesforce_solicitud", "prospectos_salesforce_testdrive", "2do_contacto_cotizacion_salesforce"],
+        "template_names": ["confirmacion_prueba_manejo","prospectos_salesforce_solicitud","prospecto_salesforce_testdrive","2do_contacto_cotizacion_salesforce",],
     },
 }
 
@@ -43,13 +43,14 @@ WHATSAPP_PHONE_ID_TO_NUMBER = {
     str(cfg["phone_number_id"]): numero
     for numero, cfg in WHATSAPP_LINES.items()
 }
+
 WHATSAPP_TEMPLATE_UI = {
     "confirmacion_prueba_manejo": {
-        "title": "Confirmación Prueba",
+        "title": "Confirmación Prueba Manejo",
         "help": "",
         "labels": {
-            "body_1": "fecha",
-            "body_2": "hora",
+            "body_1": "Hora de la cita",
+            "body_2": "Nombre del consultor",
         },
     },
 
@@ -57,7 +58,7 @@ WHATSAPP_TEMPLATE_UI = {
         "title": "Solicitud Salesforce",
         "help": "",
         "labels": {
-            "body_1": "nombre",
+            "body_1": "Nombre",
         },
         "header": {
             "type": "image",
@@ -65,10 +66,19 @@ WHATSAPP_TEMPLATE_UI = {
         },
     },
 
-    "2do_contacto_cotizacion_salesforce": {
+    "prospecto_salesforce_testdrive": {
+        "title": "Prueba de Manejo Salesforce",
         "help": "",
         "labels": {
-            "body_1": "nombre",
+            "header_1": "Nombre",
+        },
+    },
+
+    "2do_contacto_cotizacion_salesforce": {
+        "title": "Segundo Contacto Cotización Salesforce",
+        "help": "",
+        "labels": {
+            "header_1": "Nombre",
         },
     },
 }
