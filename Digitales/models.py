@@ -1,5 +1,3 @@
-#volvo
-# Digitales/models.py
 from django.db import models
 from django.utils import timezone
 from citas.models import ClienteComercial, normaliza_tel_mx
@@ -19,6 +17,14 @@ class ExpedienteDigital(models.Model):
     pauta = models.CharField(max_length=500, blank=True, default="")
     estado = models.CharField(max_length=120, blank=True, default="")
     auto_interes = models.CharField(max_length=255, blank=True, default="")
+    enganche_monto = models.PositiveIntegerField(null=True, blank=True)
+    presupuesto_mensual = models.PositiveIntegerField(null=True, blank=True)
+    buro_estado = models.CharField(max_length=30, blank=True, default="")
+    forma_pago = models.CharField(max_length=30, blank=True, default="")
+    tipo_cliente = models.CharField(max_length=30, blank=True, default="")
+    plazo_compra = models.CharField(max_length=120, blank=True, default="")
+    uso_vehiculo = models.CharField(max_length=255, blank=True, default="")
+    comprobacion_ingresos = models.CharField(max_length=200, blank=True, default="")
     asesor_digital = models.CharField(max_length=200, blank=True, default="")
     asesor_ventas = models.CharField(max_length=200, blank=True, default="")
     comentarios = models.TextField(max_length=2000, blank=True, default="")

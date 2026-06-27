@@ -12,7 +12,6 @@ from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
@@ -564,7 +563,7 @@ def validar_entrega_para_cierre(entrega):
 
 class ChecklistEntregaVehiculoViewSet(viewsets.ModelViewSet):
     authentication_classes = [SignedUserAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     queryset = (
@@ -581,28 +580,20 @@ class ChecklistEntregaVehiculoViewSet(viewsets.ModelViewSet):
         "creado", "actualizado", "fecha_hora_entrega", "agencia", "asesor_servicio",
         "tecnico_responsable", "placas", "vin", "modelo", "kilometraje", "orden_servicio", "factura",
     ]
-
     search_fields = [
         "agencia", "asesor_servicio", "tecnico_responsable", "placas", "vin", "modelo",
         "kilometraje", "orden_servicio", "factura", "observaciones", "cliente__nombre",
         "cliente__telefono", "cliente__correo",
     ]
 
-    def get_permissions(self):
-        if self.action == "create":
-            return [AllowAny()]
-        return [IsAuthenticated()]
-
     def get_queryset(self):
         qs = super().get_queryset()
-
         if es_admin(self.request):
             return qs
 
         agencia = str(getattr(self.request.user, "agencia", "") or "").strip()
         if agencia:
             qs = qs.filter(agencia=agencia)
-
         return qs
 
     def update(self, request, *args, **kwargs):

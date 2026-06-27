@@ -2,17 +2,12 @@
 from django.db import models
 from django.core.exceptions import ValidationError
 
+
 def normaliza_tel_mx(raw: str) -> str:
     digits = "".join(c for c in str(raw or "") if c.isdigit())
 
     if not digits:
         return ""
-
-    if digits.startswith("00"):
-        digits = digits[2:]
-
-    if len(digits) == 13 and digits.startswith("521"):
-        return "52" + digits[3:]
 
     if len(digits) == 10:
         return "52" + digits
