@@ -637,11 +637,122 @@ def chats_list(request):
     return Response(salida, status=status.HTTP_200_OK)
 
 
+def _numero_asesor_request(request):
+    numero_asesor = (
+        request.query_params.get("numero_asesor")
+        or request.data.get("numero_asesor")
+        or "522211092815"
+    )
+
+    return normaliza_tel_mx(numero_asesor)
+
+
+def _mensaje_chat_simple(msg):
+    created_at = msg.created_at or timezone.now()
+    local_dt = timezone.localtime(created_at)
+
+    return {
+        "id": msg.id,  # bigint local de PostgreSQL
+        "telefono": msg.telefono,
+        "numero_asesor": msg.numero_asesor,
+        "direction": msg.direction,
+        "mine": msg.direction == "out",
+        "body": msg.body or "",
+        "text": msg.body or "",
+        "wa_message_id": msg.wa_message_id or "",
+        "status": msg.status or "sent",
+        "created_at": created_at.isoformat(),
+        "time": local_dt.strftime("%H:%M"),
+        "attachments": [],
+    }
+
+
+def _respuesta_contacto_simple(request, updates_only=False):
+    telefono = normaliza_tel_mx(request.query_params.get("tel", ""))
+    numero_asesor = _numero_asesor_request(request)
+
+    if not telefono:
+        return Response(
+            {
+                "ok": False,
+                "error": "Falta tel o teléfono inválido.",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        limit = int(request.query_params.get("limit", 80))
+    except Exception:
+        limit = 80
+
+    limit = max(1, min(limit, 200))
+
+    before_id = str(request.query_params.get("before_id", "") or "").strip()
+    after_id = str(request.query_params.get("after_id", "") or "").strip()
+
+    # Compatibilidad por si antes guardaste mensajes con numero_asesor = "52"
+    numeros_asesor = [numero_asesor]
+
+    if numero_asesor != "52":
+        numeros_asesor.append("52")
+
+    qs = MensajeWhatsApp.objects.filter(
+        telefono=telefono,
+        numero_asesor__in=numeros_asesor,
+    )
+
+    has_more = False
+
+    if before_id and before_id.isdigit():
+        qs = qs.filter(id__lt=int(before_id)).order_by("-id")
+        page = list(qs[: limit + 1])
+        has_more = len(page) > limit
+        mensajes = list(reversed(page[:limit]))
+
+    elif after_id and after_id.isdigit():
+        qs = qs.filter(id__gt=int(after_id)).order_by("id")
+        page = list(qs[: limit + 1])
+        has_more = len(page) > limit
+        mensajes = page[:limit]
+
+    elif updates_only:
+        # Si after_id viene como UUID temporal del frontend, no debe romper.
+        mensajes = []
+
+    else:
+        qs = qs.order_by("-id")
+        page = list(qs[: limit + 1])
+        has_more = len(page) > limit
+        mensajes = list(reversed(page[:limit]))
+
+    data_mensajes = []
+
+    for msg in mensajes:
+        try:
+            data_mensajes.append(_mensaje_chat_simple(msg))
+        except Exception:
+            continue
+
+    return Response(
+        {
+            "ok": True,
+            "prospecto": None,
+            "mensajes": data_mensajes,
+            "paginacion": {
+                "has_more": has_more,
+                "oldest_id": data_mensajes[0]["id"] if data_mensajes else None,
+                "newest_id": data_mensajes[-1]["id"] if data_mensajes else None,
+            },
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def contacto_por_telefono(request):
     try:
-        return _get_contact_payload(request, updates_only=False)
+        return _respuesta_contacto_simple(request, updates_only=False)
     except Exception as exc:
         return Response(
             {
@@ -657,7 +768,7 @@ def contacto_por_telefono(request):
 @permission_classes([AllowAny])
 def contacto_updates(request):
     try:
-        return _get_contact_payload(request, updates_only=True)
+        return _respuesta_contacto_simple(request, updates_only=True)
     except Exception as exc:
         return Response(
             {
@@ -667,7 +778,7 @@ def contacto_updates(request):
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-
+    
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def mark_read_view(request):
