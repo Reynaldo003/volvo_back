@@ -647,6 +647,7 @@ def contacto_por_telefono(request):
             {
                 "ok": False,
                 "error": str(exc),
+                "endpoint": "contacto",
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
@@ -662,10 +663,10 @@ def contacto_updates(request):
             {
                 "ok": False,
                 "error": str(exc),
+                "endpoint": "contacto_updates",
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-
 
 @api_view(["POST"])
 @permission_classes([AllowAny])

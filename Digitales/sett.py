@@ -6,7 +6,7 @@ GRAPH_VERSION = "v22.0"
 WHATSAPP_WABA_ID_DEFAULT = "1520374786158708"
 
 whatsapp_url_mariana = 'https://graph.facebook.com/v22.0/1209013795622558/messages'
-whatsapp_numero_default = "52"
+whatsapp_numero_default = "522211092815"
 whatsapp_numero_mariana = "522211092815"
 WHATSAPP_LINES = {
     #whatsapp_numero_default: {
