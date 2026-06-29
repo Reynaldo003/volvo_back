@@ -1,36 +1,29 @@
 # Digitales/urls.py
-from django.urls import path, include
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    ProspectosViewSet,
     bienvenido,
-    webhook,
-    privacidad_meta_view,
-    eliminacion_datos_meta_view,
+    campanas_meta_recientes,
     chats_list,
     contacto_por_telefono,
-    enviar_mensaje_view,
-    enviar_plantilla_view,
-    enviar_media_view,
-    mark_read_view,
-    mark_unread_view,
-    ProspectosViewSet,
-    campanas_meta_recientes,
     contacto_updates,
     editar_mensaje_view,
+    eliminacion_datos_meta_view,
+    enviar_media_view,
+    enviar_mensaje_view,
+    enviar_plantilla_view,
+    mark_read_view,
+    mark_unread_view,
     media_proxy_view,
     plantillas_whatsapp_view,
+    privacidad_meta_view,
+    webhook,
 )
-
 
 router = DefaultRouter()
-
-router.register(
-    r"prospectos",
-    ProspectosViewSet,
-    basename="prospectos",
-)
-
+router.register(r"prospectos", ProspectosViewSet, basename="prospectos")
 
 urlpatterns = [
     path("bienvenido/", bienvenido),
@@ -42,7 +35,7 @@ urlpatterns = [
     path("chats/", chats_list),
     path("chats/mark-read/", mark_read_view),
     path("chats/mark-unread/", mark_unread_view),
-    
+
     path("contacto/", contacto_por_telefono),
     path("contacto/updates/", contacto_updates),
 
@@ -55,9 +48,5 @@ urlpatterns = [
     path("api/campanas-meta/", campanas_meta_recientes),
     path("api/", include(router.urls)),
 
-    path(
-        "media/<str:media_id>/",
-        media_proxy_view,
-        name="digitales-media-proxy",
-    ),
+    path("media/<str:media_id>/", media_proxy_view, name="digitales-media-proxy"),
 ]

@@ -1,5 +1,7 @@
+# Digitales/models.py
 from django.db import models
 from django.utils import timezone
+
 from citas.models import ClienteComercial, normaliza_tel_mx
 
 
@@ -17,6 +19,7 @@ class ExpedienteDigital(models.Model):
     pauta = models.CharField(max_length=500, blank=True, default="")
     estado = models.CharField(max_length=120, blank=True, default="")
     auto_interes = models.CharField(max_length=255, blank=True, default="")
+
     enganche_monto = models.PositiveIntegerField(null=True, blank=True)
     presupuesto_mensual = models.PositiveIntegerField(null=True, blank=True)
     buro_estado = models.CharField(max_length=30, blank=True, default="")
@@ -25,11 +28,13 @@ class ExpedienteDigital(models.Model):
     plazo_compra = models.CharField(max_length=120, blank=True, default="")
     uso_vehiculo = models.CharField(max_length=255, blank=True, default="")
     comprobacion_ingresos = models.CharField(max_length=200, blank=True, default="")
+
     asesor_digital = models.CharField(max_length=200, blank=True, default="")
     asesor_ventas = models.CharField(max_length=200, blank=True, default="")
     comentarios = models.TextField(max_length=2000, blank=True, default="")
-    primer_contacto_at = models.DateTimeField(null=True, blank=True)
-    ultimo_contacto_at = models.DateTimeField(null=True, blank=True)
+
+    primer_contacto_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    ultimo_contacto_at = models.DateTimeField(null=True, blank=True, db_index=True)
     last_read_at = models.DateTimeField(null=True, blank=True)
 
     resumen = models.TextField(blank=True, default="")
@@ -44,7 +49,6 @@ class ExpedienteDigital(models.Model):
         on_delete=models.SET_NULL,
         related_name="+",
     )
-
     ultima_cita_agendada = models.DateTimeField(null=True, blank=True)
     asistencia = models.BooleanField(default=False)
 
@@ -54,34 +58,47 @@ class ExpedienteDigital(models.Model):
     class Meta:
         db_table = "expediente_digital_volvo"
         managed = True
+        indexes = [
+            models.Index(fields=["-actualizado"]),
+            models.Index(fields=["agencia", "business"]),
+            models.Index(fields=["estado"]),
+        ]
 
-    def touch_ultimo_contacto(self, when=None, save_now=False):
+    def touch_mensaje_cliente(self, when=None, save_now=False):
         when = when or timezone.now()
+        campos = []
 
         if not self.primer_contacto_at:
             self.primer_contacto_at = when
-
-        self.ultimo_contacto_at = when
+            campos.append("primer_contacto_at")
 
         if save_now:
-            self.save(
-                update_fields=[
-                    "primer_contacto_at",
-                    "ultimo_contacto_at",
-                    "actualizado",
-                ]
-            )
+            campos.append("actualizado")
+            self.save(update_fields=list(dict.fromkeys(campos)))
+
+    def touch_ultimo_contacto(self, when=None, save_now=False):
+        """Marca cuándo respondió el asesor humano desde el CRM."""
+        when = when or timezone.now()
+        campos = []
+
+        if not self.primer_contacto_at:
+            self.primer_contacto_at = when
+            campos.append("primer_contacto_at")
+
+        self.ultimo_contacto_at = when
+        campos.append("ultimo_contacto_at")
+
+        if save_now:
+            campos.append("actualizado")
+            self.save(update_fields=list(dict.fromkeys(campos)))
 
     def mark_read(self, when=None):
         when = when or timezone.now()
         self.last_read_at = when
         self.save(update_fields=["last_read_at", "actualizado"])
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-
     def __str__(self):
-        return f"ExpedienteDigital #{self.cliente_id} - {self.cliente.telefono}"
+        return f"ExpedienteDigital Volvo #{self.cliente_id} - {self.cliente.telefono}"
 
 
 class MensajeWhatsApp(models.Model):
@@ -92,7 +109,7 @@ class MensajeWhatsApp(models.Model):
         OUT = "out", "Saliente"
 
     telefono = models.CharField(max_length=32, db_index=True)
-    numero_asesor = models.CharField(max_length=32)
+    numero_asesor = models.CharField(max_length=32, db_index=True)
 
     cliente = models.ForeignKey(
         ClienteComercial,
@@ -104,14 +121,7 @@ class MensajeWhatsApp(models.Model):
 
     direction = models.CharField(max_length=3, choices=Direccion.choices)
     body = models.TextField(blank=True, default="")
-
-    wa_message_id = models.CharField(
-        max_length=255,
-        blank=True,
-        default="",
-        db_index=True,
-    )
-
+    wa_message_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
     status = models.CharField(max_length=50, blank=True, default="sent")
     raw = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -119,11 +129,12 @@ class MensajeWhatsApp(models.Model):
     class Meta:
         db_table = "digitales_mensajes_volvo"
         managed = True
-        ordering = ["created_at"]
+        ordering = ["created_at", "id"]
         indexes = [
-            models.Index(fields=["telefono", "numero_asesor", "created_at"]),
-            models.Index(fields=["numero_asesor", "created_at"]),
-            models.Index(fields=["wa_message_id"]),
+            models.Index(fields=["telefono", "numero_asesor", "created_at", "id"], name="volvo_msg_tel_line_dt_idx"),
+            models.Index(fields=["telefono", "numero_asesor", "-created_at", "-id"], name="volvo_msg_tel_line_desc_idx"),
+            models.Index(fields=["numero_asesor", "created_at"], name="volvo_msg_line_dt_idx"),
+            models.Index(fields=["wa_message_id", "numero_asesor"], name="volvo_msg_wa_line_idx"),
         ]
 
     def save(self, *args, **kwargs):
@@ -136,17 +147,19 @@ class MensajeWhatsApp(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.direction} {self.telefono} {self.numero_asesor} {self.created_at:%Y-%m-%d %H:%M}"
-    
+        fecha = self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "sin fecha"
+        return f"{self.direction} {self.telefono} {self.numero_asesor} {fecha}"
+
+
 class LecturaWhatsApp(models.Model):
     expediente = models.ForeignKey(
         ExpedienteDigital,
         on_delete=models.CASCADE,
         related_name="lecturas_whatsapp_volvo",
     )
-
-    numero_asesor = models.CharField(max_length=15, db_index=True)
+    numero_asesor = models.CharField(max_length=32, db_index=True)
     last_read_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -158,6 +171,10 @@ class LecturaWhatsApp(models.Model):
             models.Index(fields=["expediente", "numero_asesor"]),
             models.Index(fields=["numero_asesor", "last_read_at"]),
         ]
+
+    def save(self, *args, **kwargs):
+        self.numero_asesor = normaliza_tel_mx(self.numero_asesor)
+        super().save(*args, **kwargs)
 
     def touch(self, when=None):
         self.last_read_at = when or timezone.now()
@@ -178,11 +195,7 @@ class CampanaMeta(models.Model):
 
 
 class MapeoFuenteMeta(models.Model):
-    id_fuente = models.CharField(
-        max_length=120,
-        primary_key=True,
-        db_column="id_fuente",
-    )
+    id_fuente = models.CharField(max_length=120, primary_key=True, db_column="id_fuente")
     tipo_fuente = models.CharField(max_length=30)
     id_campana = models.BigIntegerField(null=True, blank=True)
     nombre_campana = models.CharField(max_length=500, blank=True, default="")

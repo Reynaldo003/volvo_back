@@ -5,18 +5,13 @@ from django.core.exceptions import ValidationError
 
 def normaliza_tel_mx(raw: str) -> str:
     digits = "".join(c for c in str(raw or "") if c.isdigit())
-
     if not digits:
         return ""
-
     if len(digits) == 10:
         return "52" + digits
-
     if len(digits) == 12 and digits.startswith("52"):
         return digits
-
     return ""
-
 
 class ClienteComercial(models.Model):
     id_cliente = models.AutoField(primary_key=True)

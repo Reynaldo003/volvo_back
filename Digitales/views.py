@@ -1,70 +1,65 @@
 # Digitales/views.py
 import json
+import logging
 from datetime import timedelta
-from django.db import connection
-from django.db.models import Q, Max
+import mimetypes
+import threading
+import traceback
+
+from django.conf import settings
+from django.db import close_old_connections
+from django.db.models import Max, Q
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 
 from rest_framework import status, viewsets
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, parser_classes, permission_classes
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from citas.models import ClienteComercial, normaliza_tel_mx
 
-from .models import (
-    ExpedienteDigital,
-    MensajeWhatsApp,
-    LecturaWhatsApp,
-    MapeoFuenteMeta,
-)
-from .serializers import ProspectoSerializer
+from .models import CampanaMeta, ExpedienteDigital, LecturaWhatsApp, MensajeWhatsApp
+from .serializers import ProspectoSerializer, WhatsAppMessageSerializer
 from .contacto import (
-    obtener_config_linea,
-    obtener_numero_asesor_desde_webhook_value,
-    obtener_mensaje_whatsapp,
-    obtener_templates_whatsapp,
-    enviar_texto_whatsapp,
-    enviar_template_whatsapp,
-    subir_media_whatsapp,
-    enviar_media_whatsapp,
-    editar_texto_whatsapp,
+    MetaAPIError,
+    MetaMediaError,
     download_media_whatsapp,
+    editar_texto_whatsapp,
+    enviar_media_whatsapp,
+    enviar_template_whatsapp,
+    enviar_texto_whatsapp,
+    obtener_config_linea,
+    obtener_mensaje_whatsapp,
+    obtener_numero_asesor_desde_webhook_value,
+    obtener_templates_whatsapp,
+    replace_start,
+    subir_media_whatsapp,
 )
 
 try:
-    from .sett import WHATSAPP_LINES, WHATSAPP_TEMPLATE_UI
+    from .sett import WHATSAPP_LINES, token as VERIFY_TOKEN
 except Exception:
     WHATSAPP_LINES = {}
-    WHATSAPP_TEMPLATE_UI = {}
+    VERIFY_TOKEN = "PBAR&RVOLVO"
 
-def _formatea_fecha_chat(dt):
-    if not dt:
-        dt = timezone.now()
+logger = logging.getLogger(__name__)
 
-    if timezone.is_aware(dt):
-        local_dt = timezone.localtime(dt)
-    else:
-        local_dt = dt
-
-    return {
-        "created_at": local_dt.isoformat(),
-        "time": local_dt.strftime("%H:%M"),
-    }
 
 class ProspectosViewSet(viewsets.ModelViewSet):
     serializer_class = ProspectoSerializer
     permission_classes = [AllowAny]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get_queryset(self):
         queryset = (
             ExpedienteDigital.objects
             .select_related("cliente")
             .all()
-            .order_by("-actualizado", "-creado")
+            .order_by("-ultimo_contacto_at", "-primer_contacto_at", "-actualizado", "-creado")
         )
 
         search = (self.request.query_params.get("search") or "").strip()
@@ -91,86 +86,103 @@ class ProspectosViewSet(viewsets.ModelViewSet):
 
         if agencia:
             queryset = queryset.filter(agencia__iexact=agencia)
-
         if estado:
             queryset = queryset.filter(estado__iexact=estado)
-
         if asesor_digital:
             queryset = queryset.filter(asesor_digital__icontains=asesor_digital)
-
         if asesor_ventas:
             queryset = queryset.filter(asesor_ventas__icontains=asesor_ventas)
 
         return queryset
 
 
-def _primer_numero_asesor():
-    return next(iter(WHATSAPP_LINES.keys()), "")
+# ── Helpers de fechas compatibles con USE_TZ=False ───────────────────────────
+
+def _safe_local_dt(dt):
+    if not dt:
+        return None
+
+    if settings.USE_TZ and timezone.is_aware(dt):
+        return timezone.localtime(dt)
+
+    return dt
 
 
-def _request_value(request, key, default=""):
+def _parse_dt_param(value: str):
+    value = (value or "").strip()
+    if not value:
+        return None
+
+    dt = parse_datetime(value)
+    if not dt:
+        return None
+
+    if settings.USE_TZ:
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.get_current_timezone())
+        return dt
+
+    if timezone.is_aware(dt):
+        return timezone.make_naive(dt, timezone.get_current_timezone())
+
+    return dt
+
+
+def _format_time(dt):
+    dt = _safe_local_dt(dt)
+    if not dt:
+        return ""
+    return dt.strftime("%H:%M")
+
+
+def _iso_or_none(dt):
+    if not dt:
+        return None
+    return dt.isoformat()
+
+
+# ── Helpers de request/configuración ─────────────────────────────────────────
+
+def _request_value(request, key: str, default=""):
     if hasattr(request, "query_params"):
         value = request.query_params.get(key, None)
         if value is not None:
             return value
 
     data = getattr(request, "data", {}) or {}
-
     if isinstance(data, dict):
         return data.get(key, default)
 
     return default
 
 
-def _bool_value(value, default=False):
-    if value is None:
-        return default
-
-    return str(value).strip().lower() in ("1", "true", "sí", "si", "yes", "y")
-
-
-def _int_value(value, default=80, min_value=1, max_value=200):
-    try:
-        number = int(value)
-    except Exception:
-        number = default
-
-    return max(min_value, min(number, max_value))
-
-
-def _parse_dt(value):
-    if not value:
-        return None
-
-    dt = parse_datetime(str(value))
-
-    if not dt:
-        return None
-
-    if timezone.is_naive(dt):
-        dt = timezone.make_aware(dt, timezone.get_current_timezone())
-
-    return dt
+def _primer_numero_asesor():
+    return next(iter(WHATSAPP_LINES.keys()), "")
 
 
 def _get_cfg_request(request):
-    numero_asesor = (
-        _request_value(request, "numero_asesor", "")
-        or _primer_numero_asesor()
-    )
+    numero_asesor = normaliza_tel_mx(_request_value(request, "numero_asesor", "") or "")
+
+    if not numero_asesor:
+        numero_asesor = _primer_numero_asesor()
 
     cfg = obtener_config_linea(numero_asesor=numero_asesor)
-
     return cfg, cfg["numero_asesor"]
 
 
+def _int_param(request, name: str, default: int, min_value: int, max_value: int) -> int:
+    try:
+        value = int(_request_value(request, name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(value, max_value))
+
+
 def _meta_message_id(meta_response):
-    messages = meta_response.get("messages") or []
-
-    if messages and isinstance(messages[0], dict):
-        return str(messages[0].get("id") or "")
-
-    return ""
+    try:
+        return str((meta_response.get("messages") or [{}])[0].get("id") or "")
+    except Exception:
+        return ""
 
 
 def _media_type_from_file(file_obj):
@@ -178,87 +190,87 @@ def _media_type_from_file(file_obj):
 
     if content_type.startswith("image/"):
         return "image"
-
     if content_type.startswith("video/"):
         return "video"
-
     if content_type.startswith("audio/"):
+        return "audio"
+
+    guessed = mimetypes.guess_type(getattr(file_obj, "name", "") or "")[0] or ""
+    if guessed.startswith("image/"):
+        return "image"
+    if guessed.startswith("video/"):
+        return "video"
+    if guessed.startswith("audio/"):
         return "audio"
 
     return "document"
 
 
-def _ensure_cliente_expediente(telefono, cfg=None, nombre=""):
-    telefono = normaliza_tel_mx(telefono)
+# ── Helpers de negocio WhatsApp ──────────────────────────────────────────────
 
-    if not telefono:
-        raise ValueError("Teléfono inválido.")
+def _get_or_create_cliente_y_expediente(*, tel: str, profile_name: str = "", numero_asesor: str = ""):
+    tel = normaliza_tel_mx(tel)
+    numero_asesor = normaliza_tel_mx(numero_asesor or "")
 
-    cliente, creado_cliente = ClienteComercial.objects.get_or_create(
-        telefono=telefono,
-        defaults={
-            "nombre": (nombre or "Prospecto").strip(),
-            "correo": "",
-        },
+    if not tel:
+        return None, None
+
+    cliente, _ = ClienteComercial.objects.get_or_create(
+        telefono=tel,
+        defaults={"nombre": (profile_name or "Prospecto").strip()},
     )
 
-    if nombre and not cliente.nombre:
-        cliente.nombre = nombre.strip()
+    if profile_name and not (cliente.nombre or "").strip():
+        cliente.nombre = profile_name.strip()
         cliente.save(update_fields=["nombre", "actualizado_en"])
 
+    cfg_linea = WHATSAPP_LINES.get(numero_asesor, {})
     defaults = {
-        "agencia": (cfg or {}).get("agencia", ""),
-        "business": (cfg or {}).get("business", ""),
+        "agencia": (cfg_linea.get("agencia") or "").strip(),
+        "business": (cfg_linea.get("business") or "").strip(),
         "canal_contacto": "WhatsApp",
-        "estado": "Sin Respuesta",
-        "asesor_digital": (cfg or {}).get("asesor_digital", ""),
+        "estado": "Contactado",
+        "asesor_digital": (cfg_linea.get("asesor_digital") or "").strip(),
     }
 
-    expediente, creado_expediente = ExpedienteDigital.objects.get_or_create(
-        cliente=cliente,
-        defaults=defaults,
-    )
+    exp, _ = ExpedienteDigital.objects.get_or_create(cliente=cliente, defaults=defaults)
 
     cambios = []
-
     for field, value in defaults.items():
-        if value and not getattr(expediente, field, ""):
-            setattr(expediente, field, value)
+        if value and getattr(exp, field, "") != value:
+            setattr(exp, field, value)
             cambios.append(field)
 
     if cambios:
         cambios.append("actualizado")
-        expediente.save(update_fields=cambios)
+        exp.save(update_fields=list(dict.fromkeys(cambios)))
 
-    return cliente, expediente
+    return cliente, exp
 
 
-def _touch_read(expediente, numero_asesor, when=None):
-    if not expediente:
-        return
-
-    when = when or timezone.now()
-
-    expediente.last_read_at = when
-    expediente.save(update_fields=["last_read_at", "actualizado"])
-
+def _get_or_create_lectura(exp: ExpedienteDigital, numero_asesor: str) -> LecturaWhatsApp:
     lectura, _ = LecturaWhatsApp.objects.get_or_create(
-        expediente=expediente,
+        expediente=exp,
         numero_asesor=normaliza_tel_mx(numero_asesor),
     )
+    return lectura
 
+
+def _mark_read_exp(exp: ExpedienteDigital, numero_asesor: str, when=None):
+    when = when or timezone.now()
+    exp.last_read_at = when
+    exp.save(update_fields=["last_read_at", "actualizado"])
+
+    lectura = _get_or_create_lectura(exp, numero_asesor)
     lectura.last_read_at = when
     lectura.save(update_fields=["last_read_at", "updated_at"])
 
 
-def _set_unread(expediente, numero_asesor, telefono):
-    if not expediente:
-        return
-
+def _mark_unread_exp(exp: ExpedienteDigital, numero_asesor: str):
     ultimo_entrante = (
         MensajeWhatsApp.objects
         .filter(
-            telefono=normaliza_tel_mx(telefono),
+            telefono=exp.cliente.telefono,
             numero_asesor=normaliza_tel_mx(numero_asesor),
             direction=MensajeWhatsApp.Direccion.IN,
         )
@@ -266,249 +278,104 @@ def _set_unread(expediente, numero_asesor, telefono):
         .first()
     )
 
-    if ultimo_entrante:
+    when = None
+    if ultimo_entrante and ultimo_entrante.created_at:
+        # Con USE_TZ=False esto también queda naive, no llama localtime.
         when = ultimo_entrante.created_at - timedelta(microseconds=1)
-    else:
-        when = None
 
-    expediente.last_read_at = when
-    expediente.save(update_fields=["last_read_at", "actualizado"])
+    exp.last_read_at = when
+    exp.save(update_fields=["last_read_at", "actualizado"])
 
-    lectura, _ = LecturaWhatsApp.objects.get_or_create(
-        expediente=expediente,
-        numero_asesor=normaliza_tel_mx(numero_asesor),
-    )
-
+    lectura = _get_or_create_lectura(exp, numero_asesor)
     lectura.last_read_at = when
     lectura.save(update_fields=["last_read_at", "updated_at"])
 
 
-def _last_read_for(expediente, numero_asesor):
-    if not expediente:
-        return None
+def _unread_count(exp: ExpedienteDigital, numero_asesor: str) -> int:
+    qs = MensajeWhatsApp.objects.filter(
+        telefono=exp.cliente.telefono,
+        numero_asesor=normaliza_tel_mx(numero_asesor),
+        direction=MensajeWhatsApp.Direccion.IN,
+    )
 
     lectura = (
         LecturaWhatsApp.objects
-        .filter(
-            expediente=expediente,
-            numero_asesor=normaliza_tel_mx(numero_asesor),
-        )
+        .filter(expediente=exp, numero_asesor=normaliza_tel_mx(numero_asesor))
         .first()
     )
 
-    if lectura:
-        return lectura.last_read_at
+    last_read_at = lectura.last_read_at if lectura else exp.last_read_at
 
-    return expediente.last_read_at
+    if last_read_at:
+        qs = qs.filter(created_at__gt=last_read_at)
 
-
-def _attachment_url(request, media_id, numero_asesor):
-    path = f"/digitales/media/{media_id}/?numero_asesor={numero_asesor}"
-
-    if request is None:
-        return path
-
-    return request.build_absolute_uri(path)
+    return qs.count()
 
 
-def _attachments_from_raw(message_obj, request=None):
-    raw = message_obj.raw or {}
+def _cache_media_meta_en_segundo_plano(*, media_id: str, numero_asesor: str):
+    close_old_connections()
+    try:
+        download_media_whatsapp(media_id, numero_asesor=numero_asesor)
+        logger.info("MEDIA CACHEADA OK | media_id=%s numero_asesor=%s", media_id, numero_asesor)
+    except Exception as exc:
+        logger.warning("NO SE PUDO CACHEAR MEDIA | media_id=%s numero_asesor=%s error=%s", media_id, numero_asesor, exc)
+    finally:
+        close_old_connections()
 
-    meta_message = raw.get("message") or {}
-    media_type = (
-        meta_message.get("type")
-        or raw.get("media_type")
-        or raw.get("type")
-        or ""
-    )
 
-    media_type = str(media_type).lower()
-
-    if media_type not in ("image", "document", "video", "audio", "sticker"):
-        return []
-
-    media_payload = meta_message.get(media_type) or raw
-
-    media_id = (
-        media_payload.get("id")
-        or raw.get("media_id")
-        or raw.get("id")
-        or ""
-    )
-
-    if not media_id:
-        return []
-
-    filename = (
-        media_payload.get("filename")
-        or raw.get("filename")
-        or raw.get("name")
-        or ""
-    )
-
-    mime_type = (
-        media_payload.get("mime_type")
-        or raw.get("mime_type")
-        or raw.get("content_type")
-        or ""
-    )
-
-    size = (
-        media_payload.get("file_size")
-        or raw.get("size")
-        or 0
-    )
-
-    kind = "file" if media_type == "document" else media_type
-
-    return [
-        {
-            "id": media_id,
-            "kind": kind,
-            "media_type": media_type,
-            "url": _attachment_url(request, media_id, message_obj.numero_asesor),
-            "previewUrl": _attachment_url(request, media_id, message_obj.numero_asesor),
-            "name": filename,
-            "filename": filename,
-            "mime": mime_type,
-            "mime_type": mime_type,
-            "size": size,
-        }
-    ]
-
-def _serialize_message(message_obj, request=None):
-    fechas = _formatea_fecha_chat(message_obj.created_at)
-
-    return {
-        "id": message_obj.id,
-        "telefono": message_obj.telefono,
-        "numero_asesor": message_obj.numero_asesor,
-        "direction": message_obj.direction,
-        "mine": message_obj.direction == MensajeWhatsApp.Direccion.OUT,
-        "body": message_obj.body or "",
-        "text": message_obj.body or "",
-        "wa_message_id": message_obj.wa_message_id or "",
-        "status": message_obj.status or (
-            "received"
-            if message_obj.direction == MensajeWhatsApp.Direccion.IN
-            else "sent"
-        ),
-        "created_at": fechas["created_at"],
-        "time": fechas["time"],
-        "attachments": _attachments_from_raw(message_obj, request=request),
+def _guardar_mensaje_fallido(*, to: str, numero_asesor: str, cliente=None, body: str, error, extra_raw=None):
+    raw = {
+        "provider": "meta",
+        "numero_asesor": numero_asesor,
+        "error": str(error),
+        "internal_error": not isinstance(error, MetaAPIError),
     }
 
-def _find_message_ref(telefono, numero_asesor, ref):
-    if not ref:
-        return None
+    if isinstance(error, MetaAPIError):
+        raw["meta"] = error.to_dict()
 
-    qs = MensajeWhatsApp.objects.filter(
-        telefono=normaliza_tel_mx(telefono),
-        numero_asesor=normaliza_tel_mx(numero_asesor),
-    )
+    if extra_raw:
+        raw.update(extra_raw)
 
-    ref_str = str(ref).strip()
-
-    if ref_str.isdigit():
-        found = qs.filter(id=int(ref_str)).first()
-        if found:
-            return found
-
-    return qs.filter(wa_message_id=ref_str).first()
-
-
-def _get_contact_payload(request, updates_only=False):
-    cfg, numero_asesor = _get_cfg_request(request)
-
-    telefono = normaliza_tel_mx(_request_value(request, "tel", ""))
-
-    if not telefono:
-        return Response(
-            {
-                "ok": False,
-                "error": "Falta tel o el teléfono es inválido.",
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    limit = _int_value(_request_value(request, "limit", 80), default=80)
-    before_id = str(_request_value(request, "before_id", "") or "").strip()
-    after_id = str(_request_value(request, "after_id", "") or "").strip()
-    after = str(_request_value(request, "after", "") or "").strip()
-    mark_read = _bool_value(_request_value(request, "mark_read", "0"))
-
-    cliente, expediente = _ensure_cliente_expediente(telefono, cfg=cfg)
-
-    base_qs = (
-        MensajeWhatsApp.objects
-        .filter(
-            telefono=telefono,
+    try:
+        MensajeWhatsApp.objects.create(
+            telefono=to,
             numero_asesor=numero_asesor,
+            cliente=cliente,
+            direction=MensajeWhatsApp.Direccion.OUT,
+            body=body,
+            wa_message_id="",
+            status="failed",
+            raw=raw,
         )
-        .select_related("cliente")
-    )
+    except Exception as save_error:
+        logger.exception("No se pudo guardar mensaje fallido | to=%s numero_asesor=%s error=%s", to, numero_asesor, save_error)
 
-    has_more = False
 
-    if before_id:
-        ref = _find_message_ref(telefono, numero_asesor, before_id)
+def _response_meta_error(error: MetaAPIError, *, numero_asesor: str = "", extra=None):
+    payload = {
+        "ok": False,
+        "error": error.meta_message,
+        "retryable": error.retryable,
+        "meta": error.to_dict(),
+        "numero_asesor": numero_asesor,
+    }
+    if extra:
+        payload.update(extra)
 
-        if ref:
-            qs = base_qs.filter(
-                Q(created_at__lt=ref.created_at)
-                | Q(created_at=ref.created_at, id__lt=ref.id)
-            ).order_by("-created_at", "-id")
-        else:
-            qs = base_qs.none()
-
-        page = list(qs[: limit + 1])
-        has_more = len(page) > limit
-        mensajes = list(reversed(page[:limit]))
-
-    elif after_id or after:
-        qs = base_qs
-
-        ref = _find_message_ref(telefono, numero_asesor, after_id)
-
-        if ref:
-            qs = qs.filter(
-                Q(created_at__gt=ref.created_at)
-                | Q(created_at=ref.created_at, id__gt=ref.id)
-            )
-        else:
-            after_dt = _parse_dt(after)
-
-            if after_dt:
-                qs = qs.filter(created_at__gt=after_dt)
-
-        page = list(qs.order_by("created_at", "id")[: limit + 1])
-        has_more = len(page) > limit
-        mensajes = page[:limit]
-
+    if error.status_code == 429:
+        http_status = status.HTTP_429_TOO_MANY_REQUESTS
+    elif error.retryable:
+        http_status = status.HTTP_503_SERVICE_UNAVAILABLE
+    elif error.status_code == 400:
+        http_status = status.HTTP_400_BAD_REQUEST
     else:
-        page = list(base_qs.order_by("-created_at", "-id")[: limit + 1])
-        has_more = len(page) > limit
-        mensajes = list(reversed(page[:limit]))
+        http_status = status.HTTP_502_BAD_GATEWAY
 
-    if mark_read:
-        _touch_read(expediente, numero_asesor)
+    return Response(payload, status=http_status)
 
-    serialized = [_serialize_message(item, request=request) for item in mensajes]
 
-    return Response(
-        {
-            "ok": True,
-            "prospecto": ProspectoSerializer(expediente).data if expediente else None,
-            "mensajes": serialized,
-            "paginacion": {
-                "has_more": has_more,
-                "oldest_id": serialized[0]["id"] if serialized else None,
-                "newest_id": serialized[-1]["id"] if serialized else None,
-            },
-        },
-        status=status.HTTP_200_OK,
-    )
-
+# ── Vistas simples ───────────────────────────────────────────────────────────
 
 def bienvenido(request):
     return HttpResponse("Funcionando módulo Digitales Volvo - WhatsApp activo")
@@ -518,20 +385,13 @@ def privacidad_meta_view(request):
     html = """
     <!doctype html>
     <html lang="es">
-    <head>
-        <meta charset="utf-8">
-        <title>Aviso de Privacidad - CRM Volvo</title>
-    </head>
+    <head><meta charset="utf-8"><title>Aviso de Privacidad - CRM Volvo</title></head>
     <body>
         <h1>Aviso de Privacidad</h1>
-        <p>
-            Automotriz R&R utiliza este sistema CRM Volvo para gestionar
-            prospectos y clientes registrados manualmente por el equipo comercial.
-        </p>
+        <p>Automotriz R&R utiliza este CRM Volvo para gestionar prospectos y clientes contactados por canales digitales, incluido WhatsApp Business.</p>
     </body>
     </html>
     """
-
     return HttpResponse(html, content_type="text/html; charset=utf-8")
 
 
@@ -539,22 +399,213 @@ def eliminacion_datos_meta_view(request):
     html = """
     <!doctype html>
     <html lang="es">
-    <head>
-        <meta charset="utf-8">
-        <title>Eliminación de Datos - CRM Volvo</title>
-    </head>
+    <head><meta charset="utf-8"><title>Eliminación de Datos - CRM Volvo</title></head>
     <body>
         <h1>Instrucciones para eliminación de datos</h1>
-        <p>
-            Para solicitar la eliminación de tus datos personales almacenados
-            en el CRM, contacta al área responsable de Automotriz R&R.
-        </p>
+        <p>Para solicitar la eliminación de tus datos personales almacenados en el CRM, contacta al área responsable de Automotriz R&R.</p>
     </body>
     </html>
     """
-
     return HttpResponse(html, content_type="text/html; charset=utf-8")
 
+
+# ── Webhook Cloud API ────────────────────────────────────────────────────────
+
+@csrf_exempt
+def webhook(request):
+    if request.method == "GET":
+        mode = request.GET.get("hub.mode", "")
+        verify_token = request.GET.get("hub.verify_token", "")
+        challenge = request.GET.get("hub.challenge", "")
+
+        logger.info(
+            "WEBHOOK VERIFY VOLVO | mode=%s token_ok=%s challenge=%s",
+            mode,
+            verify_token == VERIFY_TOKEN,
+            challenge,
+        )
+
+        if mode == "subscribe" and verify_token == VERIFY_TOKEN and challenge:
+            return HttpResponse(challenge, content_type="text/plain")
+
+        return HttpResponse("token incorrecto", status=403)
+
+    if request.method != "POST":
+        return HttpResponse("method not allowed", status=405)
+
+    try:
+        raw_body = request.body.decode("utf-8")
+        body = json.loads(raw_body)
+        logger.info("WEBHOOK RAW BODY VOLVO: %s", json.dumps(body, ensure_ascii=False))
+    except Exception as exc:
+        logger.exception("ERROR PARSEANDO WEBHOOK VOLVO: %s", exc)
+        return HttpResponse("ok")
+
+    try:
+        entries = body.get("entry") or []
+
+        for entry in entries:
+            changes = entry.get("changes") or []
+
+            for change in changes:
+                value = change.get("value") or {}
+                metadata = value.get("metadata") or {}
+                numero_asesor = obtener_numero_asesor_desde_webhook_value(value)
+
+                if not numero_asesor:
+                    logger.warning(
+                        "WEBHOOK VOLVO SIN MAPEO DE LINEA | phone_number_id=%s display_phone_number=%s",
+                        metadata.get("phone_number_id"),
+                        metadata.get("display_phone_number"),
+                    )
+
+                contacts = value.get("contacts") or []
+                profile_name = ""
+                if contacts:
+                    profile_name = (contacts[0].get("profile") or {}).get("name", "") or ""
+
+                messages = value.get("messages") or []
+
+                for msg in messages:
+                    wa_from = str(msg.get("from") or "").strip()
+                    tel = normaliza_tel_mx(replace_start(wa_from))
+                    wa_id = str(msg.get("id") or "").strip()
+                    text = obtener_mensaje_whatsapp(msg)
+
+                    logger.info(
+                        "WEBHOOK MENSAJE VOLVO | from=%s tel=%s wa_id=%s type=%s text=%s",
+                        wa_from,
+                        tel,
+                        wa_id,
+                        msg.get("type"),
+                        text,
+                    )
+
+                    if not tel or not wa_id:
+                        logger.warning("WEBHOOK VOLVO OMITIDO SIN TEL O WA_ID | from=%s wa_id=%s", wa_from, wa_id)
+                        continue
+
+                    if not numero_asesor:
+                        logger.warning("WEBHOOK VOLVO OMITIDO POR LINEA NO RESUELTA | from=%s tel=%s wa_id=%s", wa_from, tel, wa_id)
+                        continue
+
+                    cliente, expediente = _get_or_create_cliente_y_expediente(
+                        tel=tel,
+                        profile_name=profile_name,
+                        numero_asesor=numero_asesor,
+                    )
+
+                    if not cliente or not expediente:
+                        logger.warning("WEBHOOK VOLVO OMITIDO SIN CLIENTE O EXPEDIENTE | tel=%s", tel)
+                        continue
+
+                    expediente.touch_mensaje_cliente(save_now=True)
+
+                    raw_msg = dict(msg)
+                    raw_msg["numero_asesor"] = numero_asesor
+                    raw_msg["phone_number_id"] = metadata.get("phone_number_id", "")
+                    raw_msg["display_phone_number"] = metadata.get("display_phone_number", "")
+                    raw_msg["profile_name"] = profile_name
+
+                    mensaje_entrante, created = MensajeWhatsApp.objects.get_or_create(
+                        wa_message_id=wa_id,
+                        numero_asesor=numero_asesor,
+                        defaults={
+                            "telefono": tel,
+                            "cliente": cliente,
+                            "direction": MensajeWhatsApp.Direccion.IN,
+                            "body": text,
+                            "status": "received",
+                            "raw": raw_msg,
+                        },
+                    )
+
+                    if created:
+                        logger.info("WEBHOOK VOLVO MENSAJE GUARDADO | id=%s tel=%s wa_id=%s", mensaje_entrante.id, tel, wa_id)
+                    else:
+                        cambios = []
+
+                        if not mensaje_entrante.cliente_id:
+                            mensaje_entrante.cliente = cliente
+                            cambios.append("cliente")
+
+                        if not (mensaje_entrante.telefono or "").strip():
+                            mensaje_entrante.telefono = tel
+                            cambios.append("telefono")
+
+                        if not (mensaje_entrante.body or "").strip() and text:
+                            mensaje_entrante.body = text
+                            cambios.append("body")
+
+                        raw_actual = dict(mensaje_entrante.raw or {})
+                        raw_actual["ultimo_webhook_payload"] = raw_msg
+                        mensaje_entrante.raw = raw_actual
+                        cambios.append("raw")
+
+                        if cambios:
+                            mensaje_entrante.save(update_fields=list(dict.fromkeys(cambios)))
+
+                        logger.info("WEBHOOK VOLVO MENSAJE DUPLICADO ACTUALIZADO | id=%s tel=%s wa_id=%s", mensaje_entrante.id, tel, wa_id)
+
+                    if created:
+                        media_type = str(msg.get("type") or "").lower()
+                        if media_type in ("image", "document", "video", "audio", "sticker"):
+                            media_payload = msg.get(media_type) or {}
+                            media_id = str(media_payload.get("id") or "").strip()
+
+                            if media_id:
+                                hilo_media = threading.Thread(
+                                    target=_cache_media_meta_en_segundo_plano,
+                                    kwargs={"media_id": media_id, "numero_asesor": numero_asesor},
+                                    daemon=True,
+                                )
+                                hilo_media.start()
+
+                statuses = value.get("statuses") or []
+
+                for status_payload in statuses:
+                    wa_id = str(status_payload.get("id") or "").strip()
+                    st = str(status_payload.get("status") or "").strip()
+                    errors = status_payload.get("errors") or []
+                    ts = status_payload.get("timestamp")
+
+                    if not wa_id or not st:
+                        logger.warning("WEBHOOK STATUS VOLVO OMITIDO SIN ID O STATUS | payload=%s", json.dumps(status_payload, ensure_ascii=False))
+                        continue
+
+                    qs = MensajeWhatsApp.objects.filter(wa_message_id=wa_id)
+                    if numero_asesor:
+                        qs = qs.filter(numero_asesor=numero_asesor)
+
+                    msg_obj = qs.order_by("-id").first()
+
+                    if not msg_obj:
+                        logger.warning("WEBHOOK STATUS VOLVO SIN MENSAJE LOCAL | wa_id=%s status=%s", wa_id, st)
+                        continue
+
+                    new_raw = dict(msg_obj.raw or {})
+                    new_raw["status_payload"] = status_payload
+
+                    if errors:
+                        new_raw["errors"] = errors
+                    if ts:
+                        new_raw["status_timestamp"] = ts
+
+                    msg_obj.status = st
+                    msg_obj.raw = new_raw
+                    msg_obj.save(update_fields=["status", "raw"])
+
+                    logger.info("WEBHOOK STATUS VOLVO ACTUALIZADO | wa_id=%s status=%s", wa_id, st)
+
+        return HttpResponse("ok")
+
+    except Exception as exc:
+        logger.exception("ERROR GENERAL WEBHOOK VOLVO: %s", exc)
+        traceback.print_exc()
+        return HttpResponse("ok")
+
+
+# ── API de chats/contacto ────────────────────────────────────────────────────
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
@@ -562,22 +613,15 @@ def chats_list(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
     except Exception as exc:
-        return Response(
-            {
-                "ok": False,
-                "error": str(exc),
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        return Response({"ok": False, "error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-    limit = _int_value(request.query_params.get("limit", 150), default=150, max_value=300)
+    limit = _int_param(request, "limit", default=200, min_value=1, max_value=300)
     search = str(request.query_params.get("search") or "").strip()
 
     base_qs = MensajeWhatsApp.objects.filter(numero_asesor=numero_asesor)
 
     if search:
         telefono_search = normaliza_tel_mx(search)
-
         base_qs = base_qs.filter(
             Q(telefono__icontains=telefono_search or search)
             | Q(cliente__nombre__icontains=search)
@@ -595,14 +639,9 @@ def chats_list(request):
 
     for row in rows:
         telefono = row["telefono"]
-
         ultimo = (
             MensajeWhatsApp.objects
-            .filter(
-                telefono=telefono,
-                numero_asesor=numero_asesor,
-                created_at=row["last_created"],
-            )
+            .filter(telefono=telefono, numero_asesor=numero_asesor, created_at=row["last_created"])
             .select_related("cliente")
             .order_by("-id")
             .first()
@@ -614,339 +653,162 @@ def chats_list(request):
         cliente = ultimo.cliente or ClienteComercial.objects.filter(telefono=telefono).first()
         expediente = ExpedienteDigital.objects.filter(cliente=cliente).first() if cliente else None
 
-        last_read_at = _last_read_for(expediente, numero_asesor)
-
-        unread_qs = MensajeWhatsApp.objects.filter(
-            telefono=telefono,
-            numero_asesor=numero_asesor,
-            direction=MensajeWhatsApp.Direccion.IN,
-        )
-
-        if last_read_at:
-            unread_qs = unread_qs.filter(created_at__gt=last_read_at)
-
-        unread = unread_qs.count()
-
-        nombre = ""
-        if cliente:
-            nombre = cliente.nombre or ""
-
         salida.append(
             {
-                "id": telefono,
+                "id": expediente.id if expediente else telefono,
                 "telefono": telefono,
-                "nombre": nombre or "Prospecto",
+                "nombre": (cliente.nombre if cliente else "") or "Prospecto",
                 "agencia": expediente.agencia if expediente else cfg.get("agencia", ""),
                 "linea": expediente.business if expediente else cfg.get("business", ""),
                 "estado": expediente.estado if expediente else "",
-                "unread": unread,
+                "unread": _unread_count(expediente, numero_asesor) if expediente else 0,
                 "last_text": ultimo.body or "",
-                "last_time": ultimo.created_at.isoformat(),
+                "last_time": _format_time(ultimo.created_at),
+                "last_created_at": _iso_or_none(ultimo.created_at),
+                "numero_asesor": numero_asesor,
             }
         )
 
     return Response(salida, status=status.HTTP_200_OK)
 
-def _solo_digitos(value):
-    return "".join(ch for ch in str(value or "") if ch.isdigit())
-
-
-def _variantes_tel_mx(value):
-    """
-    Genera variantes para evitar que el chat falle por diferencias como:
-    522711872907
-    5212711872907
-    2711872907
-    """
-    digits = _solo_digitos(value)
-
-    variantes = set()
-
-    if digits:
-        variantes.add(digits)
-
-    if len(digits) == 10:
-        variantes.add(f"52{digits}")
-        variantes.add(f"521{digits}")
-
-    if digits.startswith("521") and len(digits) == 13:
-        diez = digits[3:]
-        variantes.add(digits)
-        variantes.add(f"52{diez}")
-        variantes.add(diez)
-
-    if digits.startswith("52") and len(digits) == 12:
-        diez = digits[2:]
-        variantes.add(digits)
-        variantes.add(f"521{diez}")
-        variantes.add(diez)
-
-    return sorted(variantes)
-
-
-def _numero_asesor_request(request):
-    numero_asesor = (
-        request.query_params.get("numero_asesor")
-        or "522211092815"
-    )
-
-    variantes = _variantes_tel_mx(numero_asesor)
-
-    if "522211092815" not in variantes:
-        variantes.append("522211092815")
-
-    # Compatibilidad por registros viejos
-    if "52" not in variantes:
-        variantes.append("52")
-
-    return variantes
-
-def _mensaje_chat_simple(msg):
-    fechas = _formatea_fecha_chat(msg.created_at)
-
-    return {
-        "id": msg.id,
-        "telefono": msg.telefono,
-        "numero_asesor": msg.numero_asesor,
-        "direction": msg.direction,
-        "mine": msg.direction == "out",
-        "body": msg.body or "",
-        "text": msg.body or "",
-        "wa_message_id": msg.wa_message_id or "",
-        "status": msg.status or "sent",
-        "created_at": fechas["created_at"],
-        "time": fechas["time"],
-        "attachments": [],
-    }
-
-def _mensaje_chat_simple_row(row):
-    fechas = _formatea_fecha_chat(row.get("created_at"))
-
-    return {
-        "id": row["id"],
-        "telefono": row["telefono"],
-        "numero_asesor": row["numero_asesor"],
-        "direction": row["direction"],
-        "mine": row["direction"] == "out",
-        "body": row.get("body") or "",
-        "text": row.get("body") or "",
-        "wa_message_id": row.get("wa_message_id") or "",
-        "status": row.get("status") or "sent",
-        "created_at": fechas["created_at"],
-        "time": fechas["time"],
-        "attachments": [],
-    }
-
-def _fetch_mensajes_chat_raw(
-    *,
-    telefono_variantes,
-    numero_asesor_variantes,
-    limit,
-    before_id="",
-    after_id="",
-    updates_only=False,
-):
-    """
-    Consulta directa a PostgreSQL para eliminar dudas de ORM,
-    serializers, expediente, lecturas o normalización.
-    """
-
-    where = """
-        regexp_replace(telefono, '\\D', '', 'g') = ANY(%s)
-        AND regexp_replace(numero_asesor, '\\D', '', 'g') = ANY(%s)
-    """
-
-    params = [
-        telefono_variantes,
-        numero_asesor_variantes,
-    ]
-
-    order_sql = "ORDER BY id DESC"
-    extra_where = ""
-
-    if before_id and str(before_id).isdigit():
-        extra_where = "AND id < %s"
-        params.append(int(before_id))
-        order_sql = "ORDER BY id DESC"
-
-    elif after_id and str(after_id).isdigit():
-        extra_where = "AND id > %s"
-        params.append(int(after_id))
-        order_sql = "ORDER BY id ASC"
-
-    elif updates_only:
-        return [], False, 0
-
-    sql_count = f"""
-        SELECT COUNT(*)
-        FROM digitales_mensajes_volvo
-        WHERE {where}
-    """
-
-    sql = f"""
-        SELECT
-            id,
-            telefono,
-            numero_asesor,
-            direction,
-            body,
-            wa_message_id,
-            status,
-            raw,
-            created_at,
-            cliente_id
-        FROM digitales_mensajes_volvo
-        WHERE {where}
-        {extra_where}
-        {order_sql}
-        LIMIT %s
-    """
-
-    with connection.cursor() as cursor:
-        cursor.execute(sql_count, [telefono_variantes, numero_asesor_variantes])
-        total = cursor.fetchone()[0]
-
-        cursor.execute(sql, [*params, limit + 1])
-        columns = [col[0] for col in cursor.description]
-        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-    has_more = len(rows) > limit
-    rows = rows[:limit]
-
-    if order_sql == "ORDER BY id DESC":
-        rows = list(reversed(rows))
-
-    return rows, has_more, total
-
-
-def _respuesta_contacto_simple(request, updates_only=False):
-    tel_raw = request.query_params.get("tel", "")
-    telefono_variantes = _variantes_tel_mx(tel_raw)
-    numero_asesor_variantes = _numero_asesor_request(request)
-
-    if not telefono_variantes:
-        return Response(
-            {
-                "ok": False,
-                "error": "Falta tel o teléfono inválido.",
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    try:
-        limit = int(request.query_params.get("limit", 80))
-    except Exception:
-        limit = 80
-
-    limit = max(1, min(limit, 200))
-
-    before_id = str(request.query_params.get("before_id", "") or "").strip()
-    after_id = str(request.query_params.get("after_id", "") or "").strip()
-
-    rows, has_more, total = _fetch_mensajes_chat_raw(
-        telefono_variantes=telefono_variantes,
-        numero_asesor_variantes=numero_asesor_variantes,
-        limit=limit,
-        before_id=before_id,
-        after_id=after_id,
-        updates_only=updates_only,
-    )
-
-    data_mensajes = [_mensaje_chat_simple_row(row) for row in rows]
-
-    return Response(
-        {
-            "ok": True,
-            "prospecto": None,
-            "mensajes": data_mensajes,
-
-            # Alias por seguridad, aunque el frontend usa "mensajes".
-            "messages": data_mensajes,
-
-            "paginacion": {
-                "has_more": has_more,
-                "oldest_id": data_mensajes[0]["id"] if data_mensajes else None,
-                "newest_id": data_mensajes[-1]["id"] if data_mensajes else None,
-            },
-
-            # Déjalo mientras pruebas; luego lo puedes quitar.
-            "debug": {
-                "tel_raw": tel_raw,
-                "telefono_variantes": telefono_variantes,
-                "numero_asesor_variantes": numero_asesor_variantes,
-                "total_en_bd_para_chat": total,
-                "mensajes_regresados": len(data_mensajes),
-                "updates_only": updates_only,
-                "before_id": before_id,
-                "after_id": after_id,
-            },
-        },
-        status=status.HTTP_200_OK,
-    )
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def contacto_por_telefono(request):
     try:
-        return _respuesta_contacto_simple(request, updates_only=False)
-    except Exception as exc:
+        cfg, numero_asesor = _get_cfg_request(request)
+        tel = normaliza_tel_mx(request.query_params.get("tel", ""))
+
+        if not tel:
+            return Response({"ok": False, "error": "Falta tel o teléfono inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        limit = _int_param(request, "limit", default=50, min_value=1, max_value=100)
+        before_id = str(request.query_params.get("before_id") or "").strip()
+        mark_read_raw = str(request.query_params.get("mark_read", "1")).strip().lower()
+        mark_read = mark_read_raw not in ("0", "false", "no", "off")
+
+        cliente, expediente = _get_or_create_cliente_y_expediente(tel=tel, numero_asesor=numero_asesor)
+
+        qs = MensajeWhatsApp.objects.filter(telefono=tel, numero_asesor=numero_asesor).select_related("cliente")
+
+        if before_id:
+            ref = None
+            if before_id.isdigit():
+                ref = qs.filter(id=int(before_id)).only("id", "created_at").first()
+            if not ref:
+                ref = qs.filter(wa_message_id=before_id).only("id", "created_at").first()
+
+            if ref:
+                qs = qs.filter(Q(created_at__lt=ref.created_at) | Q(created_at=ref.created_at, id__lt=ref.id))
+            else:
+                qs = qs.none()
+
+        mensajes_desc = list(qs.order_by("-created_at", "-id")[: limit + 1])
+        has_more = len(mensajes_desc) > limit
+        mensajes_desc = mensajes_desc[:limit]
+        mensajes = list(reversed(mensajes_desc))
+
+        if expediente and not before_id and mark_read:
+            _mark_read_exp(expediente, numero_asesor)
+
+        serialized = WhatsAppMessageSerializer(mensajes, many=True, context={"request": request}).data
+
         return Response(
             {
-                "ok": False,
-                "error": str(exc),
-                "endpoint": "contacto",
+                "ok": True,
+                "numero_asesor_activo": numero_asesor,
+                "prospecto": ProspectoSerializer(expediente).data if expediente else None,
+                "mensajes": serialized,
+                "messages": serialized,
+                "paginacion": {
+                    "limit": limit,
+                    "has_more": has_more,
+                    "oldest_id": serialized[0]["id"] if serialized else None,
+                    "newest_id": serialized[-1]["id"] if serialized else None,
+                    "oldest_created_at": serialized[0]["created_at"] if serialized else None,
+                    "newest_created_at": serialized[-1]["created_at"] if serialized else None,
+                    "before_id": serialized[0]["id"] if serialized else None,
+                },
             },
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status=status.HTTP_200_OK,
         )
+
+    except Exception as exc:
+        logger.exception("ERROR CONTACTO VOLVO | error=%s", exc)
+        return Response({"ok": False, "error": str(exc), "endpoint": "contacto"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def contacto_updates(request):
     try:
-        return _respuesta_contacto_simple(request, updates_only=True)
-    except Exception as exc:
+        cfg, numero_asesor = _get_cfg_request(request)
+        tel = normaliza_tel_mx(request.query_params.get("tel", ""))
+
+        if not tel:
+            return Response({"ok": False, "error": "Falta tel o teléfono inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        limit = _int_param(request, "limit", default=50, min_value=1, max_value=100)
+        after = str(request.query_params.get("after") or "").strip()
+        after_id = str(request.query_params.get("after_id") or "").strip()
+
+        qs = MensajeWhatsApp.objects.filter(telefono=tel, numero_asesor=numero_asesor).select_related("cliente")
+
+        if after_id:
+            ref = None
+            if after_id.isdigit():
+                ref = qs.filter(id=int(after_id)).only("id", "created_at").first()
+            if not ref:
+                ref = qs.filter(wa_message_id=after_id).only("id", "created_at").first()
+
+            if ref:
+                qs = qs.filter(Q(created_at__gt=ref.created_at) | Q(created_at=ref.created_at, id__gt=ref.id))
+            else:
+                qs = qs.none()
+        else:
+            after_dt = _parse_dt_param(after)
+            if after_dt:
+                qs = qs.filter(created_at__gt=after_dt)
+            else:
+                qs = qs.none()
+
+        mensajes = list(qs.order_by("created_at", "id")[:limit])
+        serialized = WhatsAppMessageSerializer(mensajes, many=True, context={"request": request}).data
+
         return Response(
             {
-                "ok": False,
-                "error": str(exc),
-                "endpoint": "contacto_updates",
+                "ok": True,
+                "numero_asesor_activo": numero_asesor,
+                "mensajes": serialized,
+                "messages": serialized,
+                "server_now": timezone.now().isoformat(),
             },
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status=status.HTTP_200_OK,
         )
-    
+
+    except Exception as exc:
+        logger.exception("ERROR CONTACTO UPDATES VOLVO | error=%s", exc)
+        return Response({"ok": False, "error": str(exc), "endpoint": "contacto_updates"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def mark_read_view(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
-        telefono = normaliza_tel_mx(
-            _request_value(request, "tel", "")
-            or _request_value(request, "telefono", "")
-        )
+        tel = normaliza_tel_mx(_request_value(request, "tel", "") or _request_value(request, "telefono", ""))
 
-        if not telefono:
-            return Response(
-                {
-                    "ok": False,
-                    "error": "Falta tel.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if not tel:
+            return Response({"ok": False, "error": "Falta tel."}, status=status.HTTP_400_BAD_REQUEST)
 
-        cliente, expediente = _ensure_cliente_expediente(telefono, cfg=cfg)
-        _touch_read(expediente, numero_asesor)
+        cliente, expediente = _get_or_create_cliente_y_expediente(tel=tel, numero_asesor=numero_asesor)
+        _mark_read_exp(expediente, numero_asesor)
 
         return Response({"ok": True}, status=status.HTTP_200_OK)
 
     except Exception as exc:
-        return Response(
-            {
-                "ok": False,
-                "error": str(exc),
-            },
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        logger.exception("ERROR MARK READ VOLVO | error=%s", exc)
+        return Response({"ok": False, "error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(["POST"])
@@ -954,68 +816,51 @@ def mark_read_view(request):
 def mark_unread_view(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
-        telefono = normaliza_tel_mx(
-            _request_value(request, "tel", "")
-            or _request_value(request, "telefono", "")
-        )
+        tel = normaliza_tel_mx(_request_value(request, "tel", "") or _request_value(request, "telefono", ""))
 
-        if not telefono:
-            return Response(
-                {
-                    "ok": False,
-                    "error": "Falta tel.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if not tel:
+            return Response({"ok": False, "error": "Falta tel."}, status=status.HTTP_400_BAD_REQUEST)
 
-        cliente, expediente = _ensure_cliente_expediente(telefono, cfg=cfg)
-        _set_unread(expediente, numero_asesor, telefono)
+        cliente, expediente = _get_or_create_cliente_y_expediente(tel=tel, numero_asesor=numero_asesor)
+        _mark_unread_exp(expediente, numero_asesor)
 
         return Response({"ok": True}, status=status.HTTP_200_OK)
 
     except Exception as exc:
-        return Response(
-            {
-                "ok": False,
-                "error": str(exc),
-            },
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        logger.exception("ERROR MARK UNREAD VOLVO | error=%s", exc)
+        return Response({"ok": False, "error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+# ── Envíos WhatsApp ──────────────────────────────────────────────────────────
 
 @api_view(["POST"])
+@parser_classes([JSONParser])
 @permission_classes([AllowAny])
 def enviar_mensaje_view(request):
+    numero_asesor = ""
+    to = ""
+    text = ""
+    cliente = None
+
     try:
         cfg, numero_asesor = _get_cfg_request(request)
-
         to = normaliza_tel_mx(_request_value(request, "to", ""))
         text = str(_request_value(request, "text", "") or "").strip()
+        reply_to_message_id = str(_request_value(request, "reply_to_message_id", "") or "").strip()
 
         if not to:
-            return Response(
-                {
-                    "ok": False,
-                    "error": "Falta número destino.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+            return Response({"ok": False, "error": "Falta número destino."}, status=status.HTTP_400_BAD_REQUEST)
         if not text:
-            return Response(
-                {
-                    "ok": False,
-                    "error": "Falta texto.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"ok": False, "error": "Falta texto."}, status=status.HTTP_400_BAD_REQUEST)
 
-        cliente, expediente = _ensure_cliente_expediente(to, cfg=cfg)
+        cliente, expediente = _get_or_create_cliente_y_expediente(tel=to, numero_asesor=numero_asesor)
+        expediente.touch_ultimo_contacto(save_now=True)
 
         meta_response = enviar_texto_whatsapp(
             to=to,
             text=text,
             numero_asesor=numero_asesor,
+            reply_to_message_id=reply_to_message_id,
         )
 
         msg = MensajeWhatsApp.objects.create(
@@ -1025,54 +870,62 @@ def enviar_mensaje_view(request):
             direction=MensajeWhatsApp.Direccion.OUT,
             body=text,
             wa_message_id=_meta_message_id(meta_response),
-            status="sent",
+            status="accepted",
             raw={
+                "provider": "meta",
                 "type": "text",
-                "meta": meta_response,
+                "send": meta_response,
+                "numero_asesor": numero_asesor,
+                "origen": "asesor_humano",
+                "reply_to": reply_to_message_id,
             },
         )
-
-        expediente.touch_ultimo_contacto(save_now=True)
 
         return Response(
             {
                 "ok": True,
+                "data": meta_response,
                 "meta": meta_response,
-                "mensaje": _serialize_message(msg, request=request),
+                "wa_message_id": msg.wa_message_id,
+                "numero_asesor": numero_asesor,
+                "mensaje": WhatsAppMessageSerializer(msg, context={"request": request}).data,
             },
             status=status.HTTP_200_OK,
         )
 
+    except MetaAPIError as exc:
+        _guardar_mensaje_fallido(to=to, numero_asesor=numero_asesor, cliente=cliente, body=text, error=exc, extra_raw={"request_type": "text"})
+        return _response_meta_error(exc, numero_asesor=numero_asesor, extra={"tipo": "text", "to": to})
+
     except Exception as exc:
-        return Response(
-            {
-                "ok": False,
-                "error": str(exc),
-            },
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
+        logger.exception("ERROR ENVIAR MENSAJE VOLVO | to=%s numero_asesor=%s error=%s", to, numero_asesor, exc)
+        _guardar_mensaje_fallido(to=to, numero_asesor=numero_asesor, cliente=cliente, body=text, error=exc, extra_raw={"request_type": "text"})
+        return Response({"ok": False, "error": str(exc), "numero_asesor": numero_asesor}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
 @permission_classes([AllowAny])
 def enviar_media_view(request):
+    numero_asesor = ""
+    to = ""
+    text = ""
+    cliente = None
+
     try:
         cfg, numero_asesor = _get_cfg_request(request)
-
         to = normaliza_tel_mx(_request_value(request, "to", ""))
         text = str(_request_value(request, "text", "") or "").strip()
+        reply_to_message_id = str(_request_value(request, "reply_to_message_id", "") or "").strip()
         files = request.FILES.getlist("files")
 
         if not to:
-            return Response(
-                {
-                    "ok": False,
-                    "error": "Falta número destino.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"ok": False, "error": "Falta número destino."}, status=status.HTTP_400_BAD_REQUEST)
+        if not files and not text:
+            return Response({"ok": False, "error": "Falta texto o archivo."}, status=status.HTTP_400_BAD_REQUEST)
 
-        cliente, expediente = _ensure_cliente_expediente(to, cfg=cfg)
+        cliente, expediente = _get_or_create_cliente_y_expediente(tel=to, numero_asesor=numero_asesor)
+        expediente.touch_ultimo_contacto(save_now=True)
 
         mensajes_creados = []
 
@@ -1081,6 +934,7 @@ def enviar_media_view(request):
                 to=to,
                 text=text,
                 numero_asesor=numero_asesor,
+                reply_to_message_id=reply_to_message_id,
             )
 
             msg = MensajeWhatsApp.objects.create(
@@ -1090,18 +944,18 @@ def enviar_media_view(request):
                 direction=MensajeWhatsApp.Direccion.OUT,
                 body=text,
                 wa_message_id=_meta_message_id(meta_response),
-                status="sent",
+                status="accepted",
                 raw={
+                    "provider": "meta",
                     "type": "text",
-                    "meta": meta_response,
+                    "send": meta_response,
+                    "reply_to": reply_to_message_id,
                 },
             )
-
             mensajes_creados.append(msg)
 
         for index, file_obj in enumerate(files):
             media_type = _media_type_from_file(file_obj)
-
             upload_response = subir_media_whatsapp(
                 file_obj=file_obj,
                 numero_asesor=numero_asesor,
@@ -1110,12 +964,10 @@ def enviar_media_view(request):
             )
 
             media_id = upload_response.get("id")
-
             if not media_id:
                 raise RuntimeError(f"Meta no regresó media_id: {upload_response}")
 
             caption = text if index == 0 else ""
-
             meta_response = enviar_media_whatsapp(
                 to=to,
                 media_id=media_id,
@@ -1123,10 +975,10 @@ def enviar_media_view(request):
                 numero_asesor=numero_asesor,
                 caption=caption,
                 filename=file_obj.name,
+                reply_to_message_id=reply_to_message_id,
             )
 
             body = caption or f"[{media_type.upper()}]"
-
             msg = MensajeWhatsApp.objects.create(
                 telefono=to,
                 numero_asesor=numero_asesor,
@@ -1134,89 +986,55 @@ def enviar_media_view(request):
                 direction=MensajeWhatsApp.Direccion.OUT,
                 body=body,
                 wa_message_id=_meta_message_id(meta_response),
-                status="sent",
+                status="accepted",
                 raw={
+                    "provider": "meta",
                     "type": media_type,
+                    "meta_type": media_type,
                     "media_type": media_type,
                     "media_id": media_id,
                     "filename": file_obj.name,
                     "mime_type": getattr(file_obj, "content_type", ""),
+                    "content_type": getattr(file_obj, "content_type", ""),
                     "size": getattr(file_obj, "size", 0),
+                    "meta_upload": upload_response,
                     "upload": upload_response,
-                    "meta": meta_response,
+                    "send": meta_response,
+                    "reply_to": reply_to_message_id,
                 },
             )
-
             mensajes_creados.append(msg)
-
-        expediente.touch_ultimo_contacto(save_now=True)
 
         return Response(
             {
                 "ok": True,
-                "mensajes": [
-                    _serialize_message(item, request=request)
-                    for item in mensajes_creados
-                ],
+                "numero_asesor": numero_asesor,
+                "mensajes": WhatsAppMessageSerializer(mensajes_creados, many=True, context={"request": request}).data,
             },
             status=status.HTTP_200_OK,
         )
 
+    except MetaAPIError as exc:
+        _guardar_mensaje_fallido(to=to, numero_asesor=numero_asesor, cliente=cliente, body=text, error=exc, extra_raw={"request_type": "media"})
+        return _response_meta_error(exc, numero_asesor=numero_asesor, extra={"tipo": "media", "to": to})
+
     except Exception as exc:
-        return Response(
-            {
-                "ok": False,
-                "error": str(exc),
-            },
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
-
-
-def _inyectar_header_estatico(template_name, components):
-    components = list(components or [])
-
-    ui = WHATSAPP_TEMPLATE_UI.get(template_name, {}) if isinstance(WHATSAPP_TEMPLATE_UI, dict) else {}
-    header = ui.get("header") or {}
-
-    if not header:
-        return components
-
-    ya_tiene_header = any(
-        str(component.get("type", "")).lower() == "header"
-        for component in components
-    )
-
-    if ya_tiene_header:
-        return components
-
-    header_type = str(header.get("type") or "").lower()
-    link = str(header.get("link") or "").strip()
-
-    if header_type not in ("image", "document", "video") or not link:
-        return components
-
-    return [
-        {
-            "type": "header",
-            "parameters": [
-                {
-                    "type": header_type,
-                    header_type: {
-                        "link": link,
-                    },
-                }
-            ],
-        },
-        *components,
-    ]
+        logger.exception("ERROR ENVIAR MEDIA VOLVO | to=%s numero_asesor=%s error=%s", to, numero_asesor, exc)
+        _guardar_mensaje_fallido(to=to, numero_asesor=numero_asesor, cliente=cliente, body=text or "[MEDIA]", error=exc, extra_raw={"request_type": "media"})
+        return Response({"ok": False, "error": str(exc), "numero_asesor": numero_asesor}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(["POST"])
+@parser_classes([JSONParser])
 @permission_classes([AllowAny])
 def enviar_plantilla_view(request):
+    numero_asesor = ""
+    to = ""
+    template_name = ""
+    cliente = None
+
     try:
         cfg, numero_asesor = _get_cfg_request(request)
-
         to = normaliza_tel_mx(_request_value(request, "to", ""))
         template_name = str(_request_value(request, "template_name", "") or "").strip()
         idioma = str(_request_value(request, "idioma", "es_MX") or "es_MX").strip()
@@ -1224,27 +1042,19 @@ def enviar_plantilla_view(request):
         components = _request_value(request, "components", None)
 
         if not to:
-            return Response(
-                {
-                    "ok": False,
-                    "error": "Falta número destino.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+            return Response({"ok": False, "error": "Falta número destino."}, status=status.HTTP_400_BAD_REQUEST)
         if not template_name:
-            return Response(
-                {
-                    "ok": False,
-                    "error": "Falta template_name.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"ok": False, "error": "Falta template_name."}, status=status.HTTP_400_BAD_REQUEST)
 
-        if components:
-            components = _inyectar_header_estatico(template_name, components)
+        if params is None:
+            params = []
+        if not isinstance(params, list):
+            return Response({"ok": False, "error": "params debe ser una lista."}, status=status.HTTP_400_BAD_REQUEST)
+        if components is not None and not isinstance(components, list):
+            return Response({"ok": False, "error": "components debe ser una lista."}, status=status.HTTP_400_BAD_REQUEST)
 
-        cliente, expediente = _ensure_cliente_expediente(to, cfg=cfg)
+        cliente, expediente = _get_or_create_cliente_y_expediente(tel=to, numero_asesor=numero_asesor)
+        expediente.touch_ultimo_contacto(save_now=True)
 
         meta_response = enviar_template_whatsapp(
             to=to,
@@ -1255,7 +1065,9 @@ def enviar_plantilla_view(request):
             components=components,
         )
 
-        body = f"Plantilla: {template_name}"
+        body = f"[TEMPLATE: {template_name}]"
+        if params:
+            body = f"{body} " + " | ".join(str(item) for item in params)
 
         msg = MensajeWhatsApp.objects.create(
             telefono=to,
@@ -1264,58 +1076,51 @@ def enviar_plantilla_view(request):
             direction=MensajeWhatsApp.Direccion.OUT,
             body=body,
             wa_message_id=_meta_message_id(meta_response),
-            status="sent",
+            status="accepted",
             raw={
+                "provider": "meta",
                 "type": "template",
                 "template_name": template_name,
                 "idioma": idioma,
-                "params": params or [],
+                "params": params,
                 "components": components or [],
-                "meta": meta_response,
+                "send": meta_response,
             },
         )
-
-        expediente.touch_ultimo_contacto(save_now=True)
 
         return Response(
             {
                 "ok": True,
                 "meta": meta_response,
-                "mensaje": _serialize_message(msg, request=request),
+                "wa_message_id": msg.wa_message_id,
+                "numero_asesor": numero_asesor,
+                "mensaje": WhatsAppMessageSerializer(msg, context={"request": request}).data,
             },
             status=status.HTTP_200_OK,
         )
 
+    except MetaAPIError as exc:
+        _guardar_mensaje_fallido(to=to, numero_asesor=numero_asesor, cliente=cliente, body=f"[TEMPLATE: {template_name}]", error=exc, extra_raw={"request_type": "template"})
+        return _response_meta_error(exc, numero_asesor=numero_asesor, extra={"tipo": "template", "to": to})
+
     except Exception as exc:
-        return Response(
-            {
-                "ok": False,
-                "error": str(exc),
-            },
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
+        logger.exception("ERROR ENVIAR PLANTILLA VOLVO | to=%s numero_asesor=%s error=%s", to, numero_asesor, exc)
+        _guardar_mensaje_fallido(to=to, numero_asesor=numero_asesor, cliente=cliente, body=f"[TEMPLATE: {template_name}]", error=exc, extra_raw={"request_type": "template"})
+        return Response({"ok": False, "error": str(exc), "numero_asesor": numero_asesor}, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view(["PATCH"])
+@api_view(["PATCH", "POST"])
+@parser_classes([JSONParser])
 @permission_classes([AllowAny])
 def editar_mensaje_view(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
-
         to = normaliza_tel_mx(_request_value(request, "to", ""))
         message_id = str(_request_value(request, "message_id", "") or "").strip()
         text = str(_request_value(request, "text", "") or "").strip()
 
         if not to or not message_id or not text:
-            return Response(
-                {
-                    "ok": False,
-                    "error": "Faltan datos para editar/enviar contexto.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        cliente, expediente = _ensure_cliente_expediente(to, cfg=cfg)
+            return Response({"ok": False, "error": "Falta to, message_id o text."}, status=status.HTTP_400_BAD_REQUEST)
 
         meta_response = editar_texto_whatsapp(
             to=to,
@@ -1324,40 +1129,57 @@ def editar_mensaje_view(request):
             numero_asesor=numero_asesor,
         )
 
-        msg = MensajeWhatsApp.objects.create(
-            telefono=to,
-            numero_asesor=numero_asesor,
-            cliente=cliente,
-            direction=MensajeWhatsApp.Direccion.OUT,
-            body=text,
-            wa_message_id=_meta_message_id(meta_response),
-            status="sent",
-            raw={
-                "type": "text",
-                "edited_from": message_id,
-                "meta": meta_response,
-            },
+        msg = (
+            MensajeWhatsApp.objects
+            .filter(telefono=to, numero_asesor=numero_asesor, wa_message_id=message_id, direction=MensajeWhatsApp.Direccion.OUT)
+            .order_by("-id")
+            .first()
         )
 
-        expediente.touch_ultimo_contacto(save_now=True)
+        if msg:
+            raw = dict(msg.raw or {})
+            raw["edit"] = {"text": text, "meta": meta_response}
+            msg.body = text
+            msg.raw = raw
+            msg.save(update_fields=["body", "raw"])
 
-        return Response(
-            {
-                "ok": True,
-                "meta": meta_response,
-                "mensaje": _serialize_message(msg, request=request),
-            },
-            status=status.HTTP_200_OK,
-        )
+        return Response({"ok": True, "meta": meta_response}, status=status.HTTP_200_OK)
 
+    except MetaAPIError as exc:
+        return _response_meta_error(exc, numero_asesor=locals().get("numero_asesor", ""), extra={"tipo": "edit"})
     except Exception as exc:
+        logger.exception("ERROR EDITAR MENSAJE VOLVO | error=%s", exc)
+        return Response({"ok": False, "error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ── Media, plantillas y campañas ─────────────────────────────────────────────
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def media_proxy_view(request, media_id: str):
+    numero_asesor = normaliza_tel_mx(request.query_params.get("numero_asesor", ""))
+
+    try:
+        blob, content_type = download_media_whatsapp(media_id, numero_asesor=numero_asesor)
+        response = HttpResponse(blob, content_type=content_type)
+        response["Cache-Control"] = "private, max-age=86400"
+        return response
+
+    except MetaMediaError as exc:
+        logger.warning("MEDIA META VOLVO NO DISPONIBLE | media_id=%s numero_asesor=%s error=%s", media_id, numero_asesor, exc.to_dict())
+        status_code = 410 if exc.es_media_no_disponible() else 502
         return Response(
             {
                 "ok": False,
-                "error": str(exc),
+                "error": "El archivo ya no está disponible en Meta o no pertenece a esta línea.",
+                "meta": exc.to_dict(),
             },
-            status=status.HTTP_502_BAD_GATEWAY,
+            status=status_code,
         )
+
+    except Exception as exc:
+        logger.exception("ERROR MEDIA PROXY VOLVO | media_id=%s numero_asesor=%s error=%s", media_id, numero_asesor, exc)
+        return Response({"ok": False, "error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(["GET"])
@@ -1365,197 +1187,43 @@ def editar_mensaje_view(request):
 def plantillas_whatsapp_view(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
-
-        items = obtener_templates_whatsapp(numero_asesor=numero_asesor)
-
-        return Response(
-            {
-                "ok": True,
-                "items": items,
-            },
-            status=status.HTTP_200_OK,
-        )
-
+        data = obtener_templates_whatsapp(numero_asesor=numero_asesor)
+        return Response({"ok": True, "numero_asesor": numero_asesor, "plantillas": data, "templates": data}, status=status.HTTP_200_OK)
     except Exception as exc:
-        return Response(
-            {
-                "ok": False,
-                "items": [],
-                "error": str(exc),
-            },
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
+        logger.exception("ERROR PLANTILLAS VOLVO | error=%s", exc)
+        return Response({"ok": False, "error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def campanas_meta_recientes(request):
+    """
+    Mantiene el endpoint existente sin acoplar el flujo WhatsApp.
+    Si la BD sqlserver no está disponible, responde lista vacía en vez de romper el CRM.
+    """
     try:
-        rows = (
-            MapeoFuenteMeta.objects
-            .exclude(nombre_campana="")
-            .values("nombre_campana")
-            .distinct()
-            .order_by("nombre_campana")[:300]
+        days = _int_param(request, "days", default=30, min_value=1, max_value=365)
+        desde = timezone.now().date() - timedelta(days=days)
+
+        qs = (
+            CampanaMeta.objects.using("sqlserver")
+            .filter(Q(inicio_campana__gte=desde) | Q(fin_campana__gte=desde))
+            .order_by("-inicio_campana")[:200]
         )
 
-        items = [
+        data = [
             {
-                "value": row["nombre_campana"],
-                "label": row["nombre_campana"],
-                "nombre": row["nombre_campana"],
+                "id_campana": item.id_campana,
+                "sucursal": item.sucursal,
+                "nombre_campana": item.nombre_campana,
+                "inicio_campana": item.inicio_campana.isoformat() if item.inicio_campana else None,
+                "fin_campana": item.fin_campana.isoformat() if item.fin_campana else None,
             }
-            for row in rows
+            for item in qs
         ]
 
-        return Response(
-            {
-                "ok": True,
-                "items": items,
-            },
-            status=status.HTTP_200_OK,
-        )
-
-    except Exception:
-        return Response(
-            {
-                "ok": True,
-                "items": [],
-            },
-            status=status.HTTP_200_OK,
-        )
-
-
-@api_view(["GET"])
-@permission_classes([AllowAny])
-def media_proxy_view(request, media_id):
-    try:
-        cfg, numero_asesor = _get_cfg_request(request)
-
-        content, content_type = download_media_whatsapp(
-            media_id=media_id,
-            numero_asesor=numero_asesor,
-        )
-
-        response = HttpResponse(content, content_type=content_type)
-        response["Cache-Control"] = "private, max-age=3600"
-
-        return response
+        return Response({"ok": True, "results": data}, status=status.HTTP_200_OK)
 
     except Exception as exc:
-        return Response(
-            {
-                "ok": False,
-                "error": str(exc),
-            },
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
-
-
-@csrf_exempt
-def webhook(request):
-    if request.method == "GET":
-        challenge = request.GET.get("hub.challenge", "")
-
-        if challenge:
-            return HttpResponse(challenge, content_type="text/plain")
-
-        return HttpResponse("Webhook Volvo activo.")
-
-    if request.method != "POST":
-        return HttpResponse("Método no permitido.", status=405)
-
-    try:
-        payload = json.loads(request.body.decode("utf-8") or "{}")
-    except Exception:
-        return HttpResponse("JSON inválido.", status=400)
-
-    entries = payload.get("entry") or []
-
-    for entry in entries:
-        changes = entry.get("changes") or []
-
-        for change in changes:
-            value = change.get("value") or {}
-
-            numero_asesor = obtener_numero_asesor_desde_webhook_value(value)
-
-            if not numero_asesor:
-                continue
-
-            try:
-                cfg = obtener_config_linea(numero_asesor=numero_asesor)
-            except Exception:
-                continue
-
-            messages = value.get("messages") or []
-
-            for message in messages:
-                telefono = normaliza_tel_mx(message.get("from", ""))
-
-                if not telefono:
-                    continue
-
-                wa_message_id = str(message.get("id") or "").strip()
-                body = obtener_mensaje_whatsapp(message)
-
-                try:
-                    cliente, expediente = _ensure_cliente_expediente(
-                        telefono,
-                        cfg=cfg,
-                    )
-                except Exception:
-                    continue
-
-                if wa_message_id:
-                    msg, created = MensajeWhatsApp.objects.update_or_create(
-                        wa_message_id=wa_message_id,
-                        defaults={
-                            "telefono": telefono,
-                            "numero_asesor": numero_asesor,
-                            "cliente": cliente,
-                            "direction": MensajeWhatsApp.Direccion.IN,
-                            "body": body,
-                            "status": "received",
-                            "raw": {
-                                "message": message,
-                                "webhook_value": value,
-                            },
-                        },
-                    )
-                else:
-                    msg = MensajeWhatsApp.objects.create(
-                        telefono=telefono,
-                        numero_asesor=numero_asesor,
-                        cliente=cliente,
-                        direction=MensajeWhatsApp.Direccion.IN,
-                        body=body,
-                        status="received",
-                        raw={
-                            "message": message,
-                            "webhook_value": value,
-                        },
-                    )
-
-                expediente.touch_ultimo_contacto(save_now=True)
-
-            statuses = value.get("statuses") or []
-
-            for status_item in statuses:
-                wa_message_id = str(status_item.get("id") or "").strip()
-                status_value = str(status_item.get("status") or "").strip()
-
-                if not wa_message_id or not status_value:
-                    continue
-
-                qs = MensajeWhatsApp.objects.filter(wa_message_id=wa_message_id)
-
-                for msg in qs:
-                    raw = msg.raw or {}
-                    raw["last_status"] = status_item
-
-                    msg.status = status_value
-                    msg.raw = raw
-                    msg.save(update_fields=["status", "raw"])
-
-    return HttpResponse("ok")
+        logger.warning("No se pudieron consultar campañas Meta Volvo: %s", exc)
+        return Response({"ok": True, "results": [], "warning": str(exc)}, status=status.HTTP_200_OK)
