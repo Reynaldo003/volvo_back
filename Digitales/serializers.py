@@ -274,8 +274,13 @@ class MensajeWhatsAppSerializer(serializers.ModelSerializer):
         if not obj.created_at:
             return ""
 
-        return timezone.localtime(obj.created_at).strftime("%H:%M")
+        if timezone.is_aware(obj.created_at):
+            dt = timezone.localtime(obj.created_at)
+        else:
+            dt = obj.created_at
 
+        return dt.strftime("%H:%M")
+    
     def get_attachments(self, obj):
         """
         Se deja listo para que el frontend no truene.

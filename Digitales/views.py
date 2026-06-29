@@ -41,6 +41,19 @@ except Exception:
     WHATSAPP_LINES = {}
     WHATSAPP_TEMPLATE_UI = {}
 
+def _formatea_fecha_chat(dt):
+    if not dt:
+        dt = timezone.now()
+
+    if timezone.is_aware(dt):
+        local_dt = timezone.localtime(dt)
+    else:
+        local_dt = dt
+
+    return {
+        "created_at": local_dt.isoformat(),
+        "time": local_dt.strftime("%H:%M"),
+    }
 
 class ProspectosViewSet(viewsets.ModelViewSet):
     serializer_class = ProspectoSerializer
@@ -363,9 +376,8 @@ def _attachments_from_raw(message_obj, request=None):
         }
     ]
 
-
 def _serialize_message(message_obj, request=None):
-    local_dt = timezone.localtime(message_obj.created_at)
+    fechas = _formatea_fecha_chat(message_obj.created_at)
 
     return {
         "id": message_obj.id,
@@ -381,11 +393,10 @@ def _serialize_message(message_obj, request=None):
             if message_obj.direction == MensajeWhatsApp.Direccion.IN
             else "sent"
         ),
-        "created_at": message_obj.created_at.isoformat(),
-        "time": local_dt.strftime("%H:%M"),
+        "created_at": fechas["created_at"],
+        "time": fechas["time"],
         "attachments": _attachments_from_raw(message_obj, request=request),
     }
-
 
 def _find_message_ref(telefono, numero_asesor, ref):
     if not ref:
@@ -690,10 +701,26 @@ def _numero_asesor_request(request):
 
     return variantes
 
+def _mensaje_chat_simple(msg):
+    fechas = _formatea_fecha_chat(msg.created_at)
+
+    return {
+        "id": msg.id,
+        "telefono": msg.telefono,
+        "numero_asesor": msg.numero_asesor,
+        "direction": msg.direction,
+        "mine": msg.direction == "out",
+        "body": msg.body or "",
+        "text": msg.body or "",
+        "wa_message_id": msg.wa_message_id or "",
+        "status": msg.status or "sent",
+        "created_at": fechas["created_at"],
+        "time": fechas["time"],
+        "attachments": [],
+    }
 
 def _mensaje_chat_simple_row(row):
-    created_at = row.get("created_at") or timezone.now()
-    local_dt = timezone.localtime(created_at)
+    fechas = _formatea_fecha_chat(row.get("created_at"))
 
     return {
         "id": row["id"],
@@ -705,11 +732,10 @@ def _mensaje_chat_simple_row(row):
         "text": row.get("body") or "",
         "wa_message_id": row.get("wa_message_id") or "",
         "status": row.get("status") or "sent",
-        "created_at": created_at.isoformat(),
-        "time": local_dt.strftime("%H:%M"),
+        "created_at": fechas["created_at"],
+        "time": fechas["time"],
         "attachments": [],
     }
-
 
 def _fetch_mensajes_chat_raw(
     *,
