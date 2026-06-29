@@ -85,12 +85,14 @@ class ExpedienteDigital(models.Model):
 
 
 class MensajeWhatsApp(models.Model):
+    id = models.BigAutoField(primary_key=True)
+
     class Direccion(models.TextChoices):
         IN = "in", "Entrante"
         OUT = "out", "Saliente"
 
     telefono = models.CharField(max_length=32, db_index=True)
-    numero_asesor = models.CharField(max_length=15)
+    numero_asesor = models.CharField(max_length=32)
 
     cliente = models.ForeignKey(
         ClienteComercial,
@@ -102,9 +104,15 @@ class MensajeWhatsApp(models.Model):
 
     direction = models.CharField(max_length=3, choices=Direccion.choices)
     body = models.TextField(blank=True, default="")
-    wa_message_id = models.CharField(max_length=120, blank=True, default="", db_index=True)
-    status = models.CharField(max_length=30, blank=True, default="sent")
 
+    wa_message_id = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        db_index=True,
+    )
+
+    status = models.CharField(max_length=50, blank=True, default="sent")
     raw = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -121,12 +129,15 @@ class MensajeWhatsApp(models.Model):
     def save(self, *args, **kwargs):
         self.telefono = normaliza_tel_mx(self.telefono)
         self.numero_asesor = normaliza_tel_mx(self.numero_asesor)
+
+        if self.wa_message_id:
+            self.wa_message_id = str(self.wa_message_id)[:255]
+
         super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.direction} {self.telefono} {self.numero_asesor} {self.created_at:%Y-%m-%d %H:%M}"
-
-
+    
 class LecturaWhatsApp(models.Model):
     expediente = models.ForeignKey(
         ExpedienteDigital,
