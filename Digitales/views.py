@@ -1,7 +1,7 @@
 # Digitales/views.py
 import json
 from datetime import timedelta
-
+from django.db import connection
 from django.db.models import Q, Max
 from django.http import HttpResponse
 from django.utils import timezone
@@ -636,42 +636,169 @@ def chats_list(request):
 
     return Response(salida, status=status.HTTP_200_OK)
 
+def _solo_digitos(value):
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _variantes_tel_mx(value):
+    """
+    Genera variantes para evitar que el chat falle por diferencias como:
+    522711872907
+    5212711872907
+    2711872907
+    """
+    digits = _solo_digitos(value)
+
+    variantes = set()
+
+    if digits:
+        variantes.add(digits)
+
+    if len(digits) == 10:
+        variantes.add(f"52{digits}")
+        variantes.add(f"521{digits}")
+
+    if digits.startswith("521") and len(digits) == 13:
+        diez = digits[3:]
+        variantes.add(digits)
+        variantes.add(f"52{diez}")
+        variantes.add(diez)
+
+    if digits.startswith("52") and len(digits) == 12:
+        diez = digits[2:]
+        variantes.add(digits)
+        variantes.add(f"521{diez}")
+        variantes.add(diez)
+
+    return sorted(variantes)
+
 
 def _numero_asesor_request(request):
     numero_asesor = (
         request.query_params.get("numero_asesor")
-        or request.data.get("numero_asesor")
         or "522211092815"
     )
 
-    return normaliza_tel_mx(numero_asesor)
+    variantes = _variantes_tel_mx(numero_asesor)
+
+    if "522211092815" not in variantes:
+        variantes.append("522211092815")
+
+    # Compatibilidad por registros viejos
+    if "52" not in variantes:
+        variantes.append("52")
+
+    return variantes
 
 
-def _mensaje_chat_simple(msg):
-    created_at = msg.created_at or timezone.now()
+def _mensaje_chat_simple_row(row):
+    created_at = row.get("created_at") or timezone.now()
     local_dt = timezone.localtime(created_at)
 
     return {
-        "id": msg.id,  # bigint local de PostgreSQL
-        "telefono": msg.telefono,
-        "numero_asesor": msg.numero_asesor,
-        "direction": msg.direction,
-        "mine": msg.direction == "out",
-        "body": msg.body or "",
-        "text": msg.body or "",
-        "wa_message_id": msg.wa_message_id or "",
-        "status": msg.status or "sent",
+        "id": row["id"],
+        "telefono": row["telefono"],
+        "numero_asesor": row["numero_asesor"],
+        "direction": row["direction"],
+        "mine": row["direction"] == "out",
+        "body": row.get("body") or "",
+        "text": row.get("body") or "",
+        "wa_message_id": row.get("wa_message_id") or "",
+        "status": row.get("status") or "sent",
         "created_at": created_at.isoformat(),
         "time": local_dt.strftime("%H:%M"),
         "attachments": [],
     }
 
 
-def _respuesta_contacto_simple(request, updates_only=False):
-    telefono = normaliza_tel_mx(request.query_params.get("tel", ""))
-    numero_asesor = _numero_asesor_request(request)
+def _fetch_mensajes_chat_raw(
+    *,
+    telefono_variantes,
+    numero_asesor_variantes,
+    limit,
+    before_id="",
+    after_id="",
+    updates_only=False,
+):
+    """
+    Consulta directa a PostgreSQL para eliminar dudas de ORM,
+    serializers, expediente, lecturas o normalización.
+    """
 
-    if not telefono:
+    where = """
+        regexp_replace(telefono, '\\D', '', 'g') = ANY(%s)
+        AND regexp_replace(numero_asesor, '\\D', '', 'g') = ANY(%s)
+    """
+
+    params = [
+        telefono_variantes,
+        numero_asesor_variantes,
+    ]
+
+    order_sql = "ORDER BY id DESC"
+    extra_where = ""
+
+    if before_id and str(before_id).isdigit():
+        extra_where = "AND id < %s"
+        params.append(int(before_id))
+        order_sql = "ORDER BY id DESC"
+
+    elif after_id and str(after_id).isdigit():
+        extra_where = "AND id > %s"
+        params.append(int(after_id))
+        order_sql = "ORDER BY id ASC"
+
+    elif updates_only:
+        return [], False, 0
+
+    sql_count = f"""
+        SELECT COUNT(*)
+        FROM digitales_mensajes_volvo
+        WHERE {where}
+    """
+
+    sql = f"""
+        SELECT
+            id,
+            telefono,
+            numero_asesor,
+            direction,
+            body,
+            wa_message_id,
+            status,
+            raw,
+            created_at,
+            cliente_id
+        FROM digitales_mensajes_volvo
+        WHERE {where}
+        {extra_where}
+        {order_sql}
+        LIMIT %s
+    """
+
+    with connection.cursor() as cursor:
+        cursor.execute(sql_count, [telefono_variantes, numero_asesor_variantes])
+        total = cursor.fetchone()[0]
+
+        cursor.execute(sql, [*params, limit + 1])
+        columns = [col[0] for col in cursor.description]
+        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    if order_sql == "ORDER BY id DESC":
+        rows = list(reversed(rows))
+
+    return rows, has_more, total
+
+
+def _respuesta_contacto_simple(request, updates_only=False):
+    tel_raw = request.query_params.get("tel", "")
+    telefono_variantes = _variantes_tel_mx(tel_raw)
+    numero_asesor_variantes = _numero_asesor_request(request)
+
+    if not telefono_variantes:
         return Response(
             {
                 "ok": False,
@@ -690,63 +817,46 @@ def _respuesta_contacto_simple(request, updates_only=False):
     before_id = str(request.query_params.get("before_id", "") or "").strip()
     after_id = str(request.query_params.get("after_id", "") or "").strip()
 
-    # Compatibilidad por si antes guardaste mensajes con numero_asesor = "52"
-    numeros_asesor = [numero_asesor]
-
-    if numero_asesor != "52":
-        numeros_asesor.append("52")
-
-    qs = MensajeWhatsApp.objects.filter(
-        telefono=telefono,
-        numero_asesor__in=numeros_asesor,
+    rows, has_more, total = _fetch_mensajes_chat_raw(
+        telefono_variantes=telefono_variantes,
+        numero_asesor_variantes=numero_asesor_variantes,
+        limit=limit,
+        before_id=before_id,
+        after_id=after_id,
+        updates_only=updates_only,
     )
 
-    has_more = False
-
-    if before_id and before_id.isdigit():
-        qs = qs.filter(id__lt=int(before_id)).order_by("-id")
-        page = list(qs[: limit + 1])
-        has_more = len(page) > limit
-        mensajes = list(reversed(page[:limit]))
-
-    elif after_id and after_id.isdigit():
-        qs = qs.filter(id__gt=int(after_id)).order_by("id")
-        page = list(qs[: limit + 1])
-        has_more = len(page) > limit
-        mensajes = page[:limit]
-
-    elif updates_only:
-        # Si after_id viene como UUID temporal del frontend, no debe romper.
-        mensajes = []
-
-    else:
-        qs = qs.order_by("-id")
-        page = list(qs[: limit + 1])
-        has_more = len(page) > limit
-        mensajes = list(reversed(page[:limit]))
-
-    data_mensajes = []
-
-    for msg in mensajes:
-        try:
-            data_mensajes.append(_mensaje_chat_simple(msg))
-        except Exception:
-            continue
+    data_mensajes = [_mensaje_chat_simple_row(row) for row in rows]
 
     return Response(
         {
             "ok": True,
             "prospecto": None,
             "mensajes": data_mensajes,
+
+            # Alias por seguridad, aunque el frontend usa "mensajes".
+            "messages": data_mensajes,
+
             "paginacion": {
                 "has_more": has_more,
                 "oldest_id": data_mensajes[0]["id"] if data_mensajes else None,
                 "newest_id": data_mensajes[-1]["id"] if data_mensajes else None,
             },
+
+            # Déjalo mientras pruebas; luego lo puedes quitar.
+            "debug": {
+                "tel_raw": tel_raw,
+                "telefono_variantes": telefono_variantes,
+                "numero_asesor_variantes": numero_asesor_variantes,
+                "total_en_bd_para_chat": total,
+                "mensajes_regresados": len(data_mensajes),
+                "updates_only": updates_only,
+                "before_id": before_id,
+                "after_id": after_id,
+            },
         },
         status=status.HTTP_200_OK,
     )
-
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
