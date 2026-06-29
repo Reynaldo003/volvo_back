@@ -27,7 +27,7 @@ WHATSAPP_LINES = {
         "phone_number_id": "1209013795622558",
         "waba_id": "1520374786158708",
         "access_token": whatsapp_token,
-        "asesor_digital": "Lizbeth Cano Clara",
+        "asesor_digital": "Mariana Tlamani",
         "messages_url": whatsapp_url_mariana,
         "agencia": "Volvo",
         "business": "Nuevos",

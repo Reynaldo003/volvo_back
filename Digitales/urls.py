@@ -13,6 +13,7 @@ from .views import (
     enviar_plantilla_view,
     enviar_media_view,
     mark_read_view,
+    mark_unread_view,
     ProspectosViewSet,
     campanas_meta_recientes,
     contacto_updates,
@@ -40,7 +41,8 @@ urlpatterns = [
 
     path("chats/", chats_list),
     path("chats/mark-read/", mark_read_view),
-
+    path("chats/mark-unread/", mark_unread_view),
+    
     path("contacto/", contacto_por_telefono),
     path("contacto/updates/", contacto_updates),
 
