@@ -395,6 +395,174 @@ def enviar_texto_whatsapp(to: str, text: str, numero_asesor: str, reply_to_messa
     return _post_messages_api(cfg, payload)
 
 
+def _normalizar_parametro_template(param: dict) -> dict | None:
+    if not isinstance(param, dict):
+        return None
+
+    ptype = str(param.get("type") or "text").lower().strip()
+
+    if ptype == "text":
+        texto = str(param.get("text") or "").strip()
+
+        if not texto:
+            raise ValueError("Hay un parámetro de texto vacío en la plantilla.")
+
+        return {
+            "type": "text",
+            "text": texto,
+        }
+
+    if ptype in ("image", "video", "document"):
+        media_payload = param.get(ptype) or {}
+
+        if isinstance(media_payload, str):
+            media_payload = {"link": media_payload}
+
+        media = {}
+
+        media_id = str(media_payload.get("id") or "").strip()
+        media_link = str(media_payload.get("link") or "").strip()
+
+        if media_id:
+            media["id"] = media_id
+        elif media_link:
+            media["link"] = media_link
+        else:
+            raise ValueError(
+                f"El parámetro {ptype} necesita id o link."
+            )
+
+        if ptype == "document":
+            filename = str(media_payload.get("filename") or "").strip()
+
+            if filename:
+                media["filename"] = filename
+
+        return {
+            "type": ptype,
+            ptype: media,
+        }
+
+    if ptype == "payload":
+        payload = str(param.get("payload") or "").strip()
+
+        if not payload:
+            raise ValueError("Hay un botón sin payload.")
+
+        return {
+            "type": "payload",
+            "payload": payload,
+        }
+
+    return param
+
+
+def _ya_viene_header_template(components: list[dict]) -> bool:
+    for component in components or []:
+        ctype = str(component.get("type") or "").lower().strip()
+
+        if ctype == "header":
+            return True
+
+    return False
+
+
+def _header_media_desde_settings(template_name: str, components: list[dict]) -> dict | None:
+    if _ya_viene_header_template(components):
+        return None
+
+    ui = WHATSAPP_TEMPLATE_UI.get(template_name, {}) if isinstance(WHATSAPP_TEMPLATE_UI, dict) else {}
+    header = ui.get("header") or {}
+
+    header_type = str(header.get("type") or "").lower().strip()
+
+    if header_type not in ("image", "video", "document"):
+        return None
+
+    media = {}
+
+    media_id = str(header.get("id") or "").strip()
+    media_link = str(header.get("link") or "").strip()
+
+    if media_id:
+        media["id"] = media_id
+    elif media_link:
+        media["link"] = media_link
+    else:
+        raise ValueError(
+            f"La plantilla {template_name} tiene header {header_type}, "
+            "pero falta configurar id o link en WHATSAPP_TEMPLATE_UI."
+        )
+
+    if header_type == "document":
+        filename = str(header.get("filename") or "documento.pdf").strip()
+        media["filename"] = filename
+
+    return {
+        "type": "header",
+        "parameters": [
+            {
+                "type": header_type,
+                header_type: media,
+            }
+        ],
+    }
+
+
+def _normalizar_components_template(template_name: str, components: list[dict] | None) -> list[dict]:
+    norm_components = []
+
+    for component in components or []:
+        if not isinstance(component, dict):
+            continue
+
+        ctype = str(component.get("type") or "").lower().strip()
+
+        if ctype == "buttons":
+            ctype = "button"
+
+        if ctype not in ("header", "body", "footer", "button"):
+            continue
+
+        item = {
+            "type": ctype,
+        }
+
+        parameters = []
+
+        for param in component.get("parameters") or []:
+            normalizado = _normalizar_parametro_template(param)
+
+            if normalizado:
+                parameters.append(normalizado)
+
+        if parameters:
+            item["parameters"] = parameters
+
+        if ctype == "button":
+            if "sub_type" in component:
+                item["sub_type"] = component["sub_type"]
+
+            if "index" in component:
+                item["index"] = str(component["index"])
+
+        # Meta no necesita footer si no lleva parámetros.
+        if ctype in ("header", "body", "button") and not item.get("parameters"):
+            continue
+
+        norm_components.append(item)
+
+    header_media = _header_media_desde_settings(
+        template_name=template_name,
+        components=norm_components,
+    )
+
+    if header_media:
+        norm_components.insert(0, header_media)
+
+    return norm_components
+
+
 def enviar_template_whatsapp(
     to: str,
     template_name: str,
@@ -405,42 +573,54 @@ def enviar_template_whatsapp(
 ) -> dict:
     if not to:
         raise ValueError("Falta número destino")
+
     if not template_name:
         raise ValueError("Falta template_name")
 
     cfg = obtener_config_linea(numero_asesor=numero_asesor)
     idioma = (idioma or DEFAULT_IDIOMA).strip()
 
-    template_payload = {"name": template_name, "language": {"code": idioma}}
+    template_payload = {
+        "name": template_name,
+        "language": {
+            "code": idioma,
+        },
+    }
 
-    if components:
-        norm_components = []
-        for component in components:
-            ctype = str(component.get("type", "")).lower().strip()
-            if ctype == "buttons":
-                ctype = "button"
-            if ctype not in ("header", "body", "footer", "button"):
-                continue
+    norm_components = _normalizar_components_template(
+        template_name=template_name,
+        components=components,
+    )
 
-            item = {"type": ctype}
-            if "parameters" in component:
-                item["parameters"] = component["parameters"]
-            if "sub_type" in component:
-                item["sub_type"] = component["sub_type"]
-            if "index" in component:
-                item["index"] = component["index"]
-            norm_components.append(item)
-
-        if norm_components:
-            template_payload["components"] = norm_components
+    if norm_components:
+        template_payload["components"] = norm_components
 
     elif params:
         template_payload["components"] = [
             {
                 "type": "body",
-                "parameters": [{"type": "text", "text": str(value)} for value in params],
+                "parameters": [
+                    {
+                        "type": "text",
+                        "text": str(value).strip(),
+                    }
+                    for value in params
+                    if str(value).strip()
+                ],
             }
         ]
+
+    # Importante:
+    # Si no hay params pero la plantilla tiene header multimedia estático en
+    # WHATSAPP_TEMPLATE_UI, lo inyectamos aunque components venga vacío.
+    if "components" not in template_payload:
+        header_media = _header_media_desde_settings(
+            template_name=template_name,
+            components=[],
+        )
+
+        if header_media:
+            template_payload["components"] = [header_media]
 
     payload = {
         "messaging_product": "whatsapp",
@@ -450,7 +630,6 @@ def enviar_template_whatsapp(
     }
 
     return _post_messages_api(cfg, payload)
-
 
 def subir_media_whatsapp(file_obj, numero_asesor: str, filename: str | None = None, content_type: str | None = None) -> dict:
     cfg = obtener_config_linea(numero_asesor=numero_asesor)

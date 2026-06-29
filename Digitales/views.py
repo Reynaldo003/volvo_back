@@ -757,7 +757,16 @@ def contacto_updates(request):
         if after_id:
             ref = None
             if after_id.isdigit():
-                ref = qs.filter(id=int(after_id)).only("id", "created_at").first()
+                ref = (
+                    MensajeWhatsApp.objects
+                    .filter(
+                        telefono=tel,
+                        numero_asesor=numero_asesor,
+                        id=int(after_id),
+                    )
+                    .only("id", "created_at")
+                    .first()
+                )
             if not ref:
                 ref = qs.filter(wa_message_id=after_id).only("id", "created_at").first()
 
