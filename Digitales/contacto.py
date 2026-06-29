@@ -733,30 +733,71 @@ def _normalizar_template_meta(template: dict) -> dict:
 
 def obtener_templates_whatsapp(numero_asesor: str) -> list[dict]:
     cfg = obtener_config_linea(numero_asesor=numero_asesor)
+
     waba_id = str(cfg.get("waba_id") or "").strip()
 
     if not waba_id:
-        raise ValueError("Esta línea no tiene waba_id configurado en WHATSAPP_LINES.")
+        raise ValueError(
+            "Esta línea no tiene waba_id configurado en WHATSAPP_LINES."
+        )
 
     url = f"https://graph.facebook.com/{GRAPH_VERSION}/{waba_id}/message_templates"
-    params = {"fields": "name,status,category,language,components,id", "limit": 200}
 
-    response = requests.get(url, headers=_auth_headers(cfg), params=params, timeout=25)
+    headers = _auth_headers(cfg)
 
-    if response.status_code >= 400:
-        raise RuntimeError(f"Meta templates error {response.status_code}: {_meta_error(response)}")
+    params = {
+        "fields": "name,status,category,language,components,id",
+        "limit": 100,
+    }
 
-    data = response.json()
-    items = data.get("data") or []
     permitidas = set(cfg.get("template_names") or [])
+
     salida = []
+    next_url = url
+    next_params = params
 
-    for item in items:
-        normalizada = _normalizar_template_meta(item)
-        if normalizada["status"].upper() != "APPROVED":
-            continue
-        if permitidas and normalizada["key"] not in permitidas:
-            continue
-        salida.append(normalizada)
+    while next_url:
+        response = requests.get(
+            next_url,
+            headers=headers,
+            params=next_params,
+            timeout=25,
+        )
 
-    return sorted(salida, key=lambda item: item["title"].lower())
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Meta templates error {response.status_code}: {_meta_error(response)}"
+            )
+
+        data = response.json()
+        items = data.get("data") or []
+
+        for item in items:
+            normalizada = _normalizar_template_meta(item)
+
+            # Solo mostramos plantillas aprobadas.
+            if str(normalizada.get("status") or "").upper() != "APPROVED":
+                continue
+
+            key = normalizada.get("key") or normalizada.get("name") or ""
+
+            # Ya no ocultamos las que no estén en template_names.
+            # Solo agregamos una bandera para saber si estaba registrada manualmente.
+            normalizada["permitida"] = key in permitidas if permitidas else True
+            normalizada["registrada_en_settings"] = key in permitidas
+
+            salida.append(normalizada)
+
+        paging = data.get("paging") or {}
+        next_url = paging.get("next") or ""
+
+        # Cuando Meta manda paging.next, ya viene con querystring incluido.
+        next_params = None
+
+    return sorted(
+        salida,
+        key=lambda item: (
+            str(item.get("title") or "").lower(),
+            str(item.get("language") or item.get("idioma") or "").lower(),
+        ),
+    )

@@ -1187,12 +1187,30 @@ def media_proxy_view(request, media_id: str):
 def plantillas_whatsapp_view(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
-        data = obtener_templates_whatsapp(numero_asesor=numero_asesor)
-        return Response({"ok": True, "numero_asesor": numero_asesor, "plantillas": data, "templates": data}, status=status.HTTP_200_OK)
-    except Exception as exc:
-        logger.exception("ERROR PLANTILLAS VOLVO | error=%s", exc)
-        return Response({"ok": False, "error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
+        items = obtener_templates_whatsapp(numero_asesor=numero_asesor)
+
+        return Response(
+            {
+                "ok": True,
+                "numero_asesor": numero_asesor,
+                "waba_id": cfg.get("waba_id", ""),
+                "phone_number_id": cfg.get("phone_number_id", ""),
+                "total": len(items),
+                "items": items,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    except Exception as exc:
+        return Response(
+            {
+                "ok": False,
+                "items": [],
+                "error": str(exc),
+            },
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
