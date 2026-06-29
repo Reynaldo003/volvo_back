@@ -1,7 +1,8 @@
 # Digitales/serializers.py
+from django.utils import timezone
 from rest_framework import serializers
 
-from .models import ExpedienteDigital
+from .models import ExpedienteDigital, MensajeWhatsApp
 from citas.models import ClienteComercial, normaliza_tel_mx
 
 
@@ -40,7 +41,8 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "canal_contacto",
             "pauta",
             "estado",
-            "auto_interes","enganche_monto",
+            "auto_interes",
+            "enganche_monto",
             "presupuesto_mensual",
             "buro_estado",
             "forma_pago",
@@ -52,8 +54,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "asesor_ventas",
             "comentarios",
 
-            # Campos de resumen se dejan por compatibilidad,
-            # aunque ahorita no uses IA.
+            # Resumen / IA
             "resumen",
             "resumen_actualizado_at",
             "resumen_fuente",
@@ -111,12 +112,15 @@ class ProspectoSerializer(serializers.ModelSerializer):
 
         cambios = []
 
-        if nombre and nombre.strip() and cliente.nombre != nombre.strip():
-            cliente.nombre = nombre.strip()
+        nombre_limpio = (nombre or "").strip()
+        correo_limpio = (correo or "").strip()
+
+        if nombre_limpio and cliente.nombre != nombre_limpio:
+            cliente.nombre = nombre_limpio
             cambios.append("nombre")
 
-        if correo is not None and cliente.correo != (correo or "").strip():
-            cliente.correo = (correo or "").strip()
+        if correo is not None and cliente.correo != correo_limpio:
+            cliente.correo = correo_limpio
             cambios.append("correo")
 
         if cambios:
@@ -187,13 +191,19 @@ class ProspectoSerializer(serializers.ModelSerializer):
                 cliente.telefono = telefono_normalizado
                 cambios_cliente.append("telefono")
 
-        if nombre is not None and nombre.strip() and cliente.nombre != nombre.strip():
-            cliente.nombre = nombre.strip()
-            cambios_cliente.append("nombre")
+        if nombre is not None:
+            nombre_limpio = nombre.strip()
 
-        if correo is not None and cliente.correo != (correo or "").strip():
-            cliente.correo = (correo or "").strip()
-            cambios_cliente.append("correo")
+            if nombre_limpio and cliente.nombre != nombre_limpio:
+                cliente.nombre = nombre_limpio
+                cambios_cliente.append("nombre")
+
+        if correo is not None:
+            correo_limpio = (correo or "").strip()
+
+            if cliente.correo != correo_limpio:
+                cliente.correo = correo_limpio
+                cambios_cliente.append("correo")
 
         if cambios_cliente:
             cambios_cliente.append("actualizado_en")
@@ -205,3 +215,93 @@ class ProspectoSerializer(serializers.ModelSerializer):
         instance.save()
 
         return instance
+
+
+class MensajeWhatsAppSerializer(serializers.ModelSerializer):
+    """
+    Serializer para mensajes del chat.
+
+    Importante:
+    - id siempre es el ID local bigint de PostgreSQL.
+    - wa_message_id es el ID real de Meta.
+    - El UUID del frontend no se guarda aquí.
+    """
+
+    id = serializers.IntegerField(read_only=True)
+    cliente_id = serializers.IntegerField(source="cliente.id_cliente", read_only=True)
+
+    mine = serializers.SerializerMethodField()
+    text = serializers.SerializerMethodField()
+    time = serializers.SerializerMethodField()
+    attachments = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MensajeWhatsApp
+        fields = [
+            "id",
+            "telefono",
+            "numero_asesor",
+            "cliente_id",
+            "direction",
+            "mine",
+            "body",
+            "text",
+            "wa_message_id",
+            "status",
+            "raw",
+            "created_at",
+            "time",
+            "attachments",
+        ]
+
+        read_only_fields = [
+            "id",
+            "cliente_id",
+            "mine",
+            "text",
+            "created_at",
+            "time",
+            "attachments",
+        ]
+
+    def get_mine(self, obj):
+        return obj.direction == MensajeWhatsApp.Direccion.OUT
+
+    def get_text(self, obj):
+        return obj.body or ""
+
+    def get_time(self, obj):
+        if not obj.created_at:
+            return ""
+
+        return timezone.localtime(obj.created_at).strftime("%H:%M")
+
+    def get_attachments(self, obj):
+        """
+        Se deja listo para que el frontend no truene.
+        Si manejas archivos/media, lo recomendable es seguir usando
+        _attachments_from_raw() desde views.py porque necesita request.build_absolute_uri().
+        """
+        return []
+
+    def validate_telefono(self, value):
+        telefono = normaliza_tel_mx(value)
+
+        if not telefono:
+            raise serializers.ValidationError("Teléfono inválido.")
+
+        return telefono
+
+    def validate_numero_asesor(self, value):
+        numero_asesor = normaliza_tel_mx(value)
+
+        if not numero_asesor:
+            raise serializers.ValidationError("Número asesor inválido.")
+
+        return numero_asesor
+
+    def validate_wa_message_id(self, value):
+        return str(value or "")[:255]
+
+    def validate_status(self, value):
+        return str(value or "sent")[:50]
