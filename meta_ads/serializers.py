@@ -1,12 +1,12 @@
 # meta_ads/serializers.py
 from rest_framework import serializers
 
-from .models import CampanaMeta
+from .models import CampanaMetaVolvo
 
 
 class CampanaMetaListSerializer(serializers.ModelSerializer):
     class Meta:
-        model = CampanaMeta
+        model = CampanaMetaVolvo
         fields = (
             "id_campana",
             "id_concesionaria",
@@ -33,5 +33,5 @@ class CampanaMetaSerializer(serializers.ModelSerializer):
     """
 
     class Meta:
-        model = CampanaMeta
+        model = CampanaMetaVolvo
         fields = "__all__"

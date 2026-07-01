@@ -11,7 +11,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from .models import CampanaMeta
+from .models import CampanaMetaVolvo
 from .serializers import CampanaMetaListSerializer, CampanaMetaSerializer
 
 
@@ -96,7 +96,7 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         params = self.request.query_params
 
-        qs = CampanaMeta.objects.using("sqlserver_meta").all()
+        qs = CampanaMetaVolvo.objects.using("sqlserver_meta").all()
 
         q = (params.get("q") or "").strip()
         sucursal = (params.get("sucursal") or "").strip()
@@ -258,7 +258,7 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="opciones")
     def opciones(self, request):
-        qs = CampanaMeta.objects.using("sqlserver_meta").all()
+        qs = CampanaMetaVolvo.objects.using("sqlserver_meta").all()
 
         sucursales = (
             qs.exclude(sucursal__isnull=True)
