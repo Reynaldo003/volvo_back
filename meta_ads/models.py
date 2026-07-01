@@ -1,7 +1,7 @@
 #meta_ads/models.py
 from django.db import models
 
-class CampanaMeta(models.Model):
+class CampanaMetaVolvo(models.Model):
     id_campana = models.BigIntegerField(primary_key=True)
 
     id_concesionaria = models.IntegerField()
@@ -91,7 +91,7 @@ class CampanaMeta(models.Model):
 
     class Meta:
         managed = False
-        db_table = "campanas_meta"
+        db_table = "campanas_meta_volvo"
         ordering = ["-inicio_informe", "-id_campana"]
         verbose_name = "Campaña Meta"
         verbose_name_plural = "Campañas Meta"
