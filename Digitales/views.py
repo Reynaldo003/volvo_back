@@ -671,7 +671,6 @@ def chats_list(request):
 
     return Response(salida, status=status.HTTP_200_OK)
 
-
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def contacto_por_telefono(request):
@@ -680,38 +679,75 @@ def contacto_por_telefono(request):
         tel = normaliza_tel_mx(request.query_params.get("tel", ""))
 
         if not tel:
-            return Response({"ok": False, "error": "Falta tel o teléfono inválido."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"ok": False, "error": "Falta tel o teléfono inválido."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         limit = _int_param(request, "limit", default=50, min_value=1, max_value=100)
         before_id = str(request.query_params.get("before_id") or "").strip()
+
         mark_read_raw = str(request.query_params.get("mark_read", "1")).strip().lower()
         mark_read = mark_read_raw not in ("0", "false", "no", "off")
 
-        cliente, expediente = _get_or_create_cliente_y_expediente(tel=tel, numero_asesor=numero_asesor)
+        cliente, expediente = _get_or_create_cliente_y_expediente(
+            tel=tel,
+            numero_asesor=numero_asesor,
+        )
 
-        qs = MensajeWhatsApp.objects.filter(telefono=tel, numero_asesor=numero_asesor).select_related("cliente")
+        # Query base sin select_related.
+        # Esta se usa para buscar referencias ligeras.
+        base_qs = MensajeWhatsApp.objects.filter(
+            telefono=tel,
+            numero_asesor=numero_asesor,
+        )
+
+        # Query completa para serializar mensajes.
+        # Aquí sí conviene traer cliente para evitar consultas extra.
+        qs = base_qs.select_related("cliente")
 
         if before_id:
             ref = None
+
             if before_id.isdigit():
-                ref = qs.filter(id=int(before_id)).only("id", "created_at").first()
+                ref = (
+                    base_qs
+                    .filter(id=int(before_id))
+                    .only("id", "created_at")
+                    .first()
+                )
+
             if not ref:
-                ref = qs.filter(wa_message_id=before_id).only("id", "created_at").first()
+                ref = (
+                    base_qs
+                    .filter(wa_message_id=before_id)
+                    .only("id", "created_at")
+                    .first()
+                )
 
             if ref:
-                qs = qs.filter(Q(created_at__lt=ref.created_at) | Q(created_at=ref.created_at, id__lt=ref.id))
+                qs = qs.filter(
+                    Q(created_at__lt=ref.created_at)
+                    | Q(created_at=ref.created_at, id__lt=ref.id)
+                )
             else:
                 qs = qs.none()
 
         mensajes_desc = list(qs.order_by("-created_at", "-id")[: limit + 1])
+
         has_more = len(mensajes_desc) > limit
         mensajes_desc = mensajes_desc[:limit]
+
         mensajes = list(reversed(mensajes_desc))
 
         if expediente and not before_id and mark_read:
             _mark_read_exp(expediente, numero_asesor)
 
-        serialized = WhatsAppMessageSerializer(mensajes, many=True, context={"request": request}).data
+        serialized = WhatsAppMessageSerializer(
+            mensajes,
+            many=True,
+            context={"request": request},
+        ).data
 
         return Response(
             {
@@ -735,8 +771,10 @@ def contacto_por_telefono(request):
 
     except Exception as exc:
         logger.exception("ERROR CONTACTO VOLVO | error=%s", exc)
-        return Response({"ok": False, "error": str(exc), "endpoint": "contacto"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+        return Response(
+            {"ok": False, "error": str(exc), "endpoint": "contacto"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
@@ -746,43 +784,66 @@ def contacto_updates(request):
         tel = normaliza_tel_mx(request.query_params.get("tel", ""))
 
         if not tel:
-            return Response({"ok": False, "error": "Falta tel o teléfono inválido."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"ok": False, "error": "Falta tel o teléfono inválido."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         limit = _int_param(request, "limit", default=50, min_value=1, max_value=100)
         after = str(request.query_params.get("after") or "").strip()
         after_id = str(request.query_params.get("after_id") or "").strip()
 
-        qs = MensajeWhatsApp.objects.filter(telefono=tel, numero_asesor=numero_asesor).select_related("cliente")
+        # Query base sin select_related.
+        # Se usa para buscar referencias con only().
+        base_qs = MensajeWhatsApp.objects.filter(
+            telefono=tel,
+            numero_asesor=numero_asesor,
+        )
+
+        # Query completa para serializar.
+        qs = base_qs.select_related("cliente")
 
         if after_id:
             ref = None
+
             if after_id.isdigit():
                 ref = (
-                    MensajeWhatsApp.objects
-                    .filter(
-                        telefono=tel,
-                        numero_asesor=numero_asesor,
-                        id=int(after_id),
-                    )
+                    base_qs
+                    .filter(id=int(after_id))
                     .only("id", "created_at")
                     .first()
                 )
+
             if not ref:
-                ref = qs.filter(wa_message_id=after_id).only("id", "created_at").first()
+                ref = (
+                    base_qs
+                    .filter(wa_message_id=after_id)
+                    .only("id", "created_at")
+                    .first()
+                )
 
             if ref:
-                qs = qs.filter(Q(created_at__gt=ref.created_at) | Q(created_at=ref.created_at, id__gt=ref.id))
+                qs = qs.filter(
+                    Q(created_at__gt=ref.created_at)
+                    | Q(created_at=ref.created_at, id__gt=ref.id)
+                )
             else:
                 qs = qs.none()
         else:
             after_dt = _parse_dt_param(after)
+
             if after_dt:
                 qs = qs.filter(created_at__gt=after_dt)
             else:
                 qs = qs.none()
 
         mensajes = list(qs.order_by("created_at", "id")[:limit])
-        serialized = WhatsAppMessageSerializer(mensajes, many=True, context={"request": request}).data
+
+        serialized = WhatsAppMessageSerializer(
+            mensajes,
+            many=True,
+            context={"request": request},
+        ).data
 
         return Response(
             {
@@ -797,8 +858,10 @@ def contacto_updates(request):
 
     except Exception as exc:
         logger.exception("ERROR CONTACTO UPDATES VOLVO | error=%s", exc)
-        return Response({"ok": False, "error": str(exc), "endpoint": "contacto_updates"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+        return Response(
+            {"ok": False, "error": str(exc), "endpoint": "contacto_updates"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -1224,16 +1287,12 @@ def plantillas_whatsapp_view(request):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def campanas_meta_recientes(request):
-    """
-    Mantiene el endpoint existente sin acoplar el flujo WhatsApp.
-    Si la BD sqlserver no está disponible, responde lista vacía en vez de romper el CRM.
-    """
     try:
         days = _int_param(request, "days", default=30, min_value=1, max_value=365)
         desde = timezone.now().date() - timedelta(days=days)
 
         qs = (
-            CampanaMeta.objects.using("sqlserver")
+            CampanaMeta.objects.using("sqlserver_meta")
             .filter(Q(inicio_campana__gte=desde) | Q(fin_campana__gte=desde))
             .order_by("-inicio_campana")[:200]
         )
