@@ -1104,28 +1104,50 @@ def enviar_plantilla_view(request):
     to = ""
     template_name = ""
     cliente = None
+    preview_text = ""
 
     try:
         cfg, numero_asesor = _get_cfg_request(request)
+
         to = normaliza_tel_mx(_request_value(request, "to", ""))
         template_name = str(_request_value(request, "template_name", "") or "").strip()
         idioma = str(_request_value(request, "idioma", "es_MX") or "es_MX").strip()
         params = _request_value(request, "params", None)
         components = _request_value(request, "components", None)
+        preview_text = str(_request_value(request, "preview_text", "") or "").strip()
 
         if not to:
-            return Response({"ok": False, "error": "Falta número destino."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"ok": False, "error": "Falta número destino."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if not template_name:
-            return Response({"ok": False, "error": "Falta template_name."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"ok": False, "error": "Falta template_name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if params is None:
             params = []
-        if not isinstance(params, list):
-            return Response({"ok": False, "error": "params debe ser una lista."}, status=status.HTTP_400_BAD_REQUEST)
-        if components is not None and not isinstance(components, list):
-            return Response({"ok": False, "error": "components debe ser una lista."}, status=status.HTTP_400_BAD_REQUEST)
 
-        cliente, expediente = _get_or_create_cliente_y_expediente(tel=to, numero_asesor=numero_asesor)
+        if not isinstance(params, list):
+            return Response(
+                {"ok": False, "error": "params debe ser una lista."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if components is not None and not isinstance(components, list):
+            return Response(
+                {"ok": False, "error": "components debe ser una lista."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cliente, expediente = _get_or_create_cliente_y_expediente(
+            tel=to,
+            numero_asesor=numero_asesor,
+        )
+
         expediente.touch_ultimo_contacto(save_now=True)
 
         meta_response = enviar_template_whatsapp(
@@ -1137,8 +1159,12 @@ def enviar_plantilla_view(request):
             components=components,
         )
 
-        body = f"[TEMPLATE: {template_name}]"
-        if params:
+        # Esto es lo que se mostrará en el chat.
+        # Si el front manda preview_text, guardamos el mensaje completo.
+        # Si por alguna razón no llega, dejamos el marcador como respaldo.
+        body = preview_text or f"[TEMPLATE:{template_name}]"
+
+        if not preview_text and params:
             body = f"{body} " + " | ".join(str(item) for item in params)
 
         msg = MensajeWhatsApp.objects.create(
@@ -1156,6 +1182,8 @@ def enviar_plantilla_view(request):
                 "idioma": idioma,
                 "params": params,
                 "components": components or [],
+                "preview_text": preview_text,
+                "template_preview": preview_text,
                 "send": meta_response,
             },
         )
@@ -1166,20 +1194,67 @@ def enviar_plantilla_view(request):
                 "meta": meta_response,
                 "wa_message_id": msg.wa_message_id,
                 "numero_asesor": numero_asesor,
-                "mensaje": WhatsAppMessageSerializer(msg, context={"request": request}).data,
+                "mensaje": WhatsAppMessageSerializer(
+                    msg,
+                    context={"request": request},
+                ).data,
             },
             status=status.HTTP_200_OK,
         )
 
     except MetaAPIError as exc:
-        _guardar_mensaje_fallido(to=to, numero_asesor=numero_asesor, cliente=cliente, body=f"[TEMPLATE: {template_name}]", error=exc, extra_raw={"request_type": "template"})
-        return _response_meta_error(exc, numero_asesor=numero_asesor, extra={"tipo": "template", "to": to})
+        body_error = preview_text or f"[TEMPLATE:{template_name}]"
+
+        _guardar_mensaje_fallido(
+            to=to,
+            numero_asesor=numero_asesor,
+            cliente=cliente,
+            body=body_error,
+            error=exc,
+            extra_raw={
+                "request_type": "template",
+                "template_name": template_name,
+                "preview_text": preview_text,
+            },
+        )
+
+        return _response_meta_error(
+            exc,
+            numero_asesor=numero_asesor,
+            extra={"tipo": "template", "to": to},
+        )
 
     except Exception as exc:
-        logger.exception("ERROR ENVIAR PLANTILLA VOLVO | to=%s numero_asesor=%s error=%s", to, numero_asesor, exc)
-        _guardar_mensaje_fallido(to=to, numero_asesor=numero_asesor, cliente=cliente, body=f"[TEMPLATE: {template_name}]", error=exc, extra_raw={"request_type": "template"})
-        return Response({"ok": False, "error": str(exc), "numero_asesor": numero_asesor}, status=status.HTTP_400_BAD_REQUEST)
+        logger.exception(
+            "ERROR ENVIAR PLANTILLA VOLVO | to=%s numero_asesor=%s error=%s",
+            to,
+            numero_asesor,
+            exc,
+        )
 
+        body_error = preview_text or f"[TEMPLATE:{template_name}]"
+
+        _guardar_mensaje_fallido(
+            to=to,
+            numero_asesor=numero_asesor,
+            cliente=cliente,
+            body=body_error,
+            error=exc,
+            extra_raw={
+                "request_type": "template",
+                "template_name": template_name,
+                "preview_text": preview_text,
+            },
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": str(exc),
+                "numero_asesor": numero_asesor,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
 @api_view(["PATCH", "POST"])
 @parser_classes([JSONParser])
