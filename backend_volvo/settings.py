@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     "recepcion_volvo",
     "checklist_entrega",
     "checklist_general",
+    "meta_ads",
 ]
 
 
@@ -129,6 +130,18 @@ DATABASES = {
 #        "HOST": "127.0.0.1",
         "HOST": "191.96.31.18",
         "PORT": "5432",
+    },
+    'sqlserver_meta': {
+        'ENGINE': 'mssql',
+        'NAME': 'VOLVO',
+        'USER': 'Israel',
+        'PASSWORD': 'Isr4el@2025',
+        'HOST': '187.141.69.254',
+        'PORT': '1433',
+        'OPTIONS': {
+            'driver': 'ODBC Driver 18 for SQL Server',
+            "extra_params": "TrustServerCertificate=yes",
+        }
     },
 }
 

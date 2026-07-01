@@ -24,6 +24,7 @@ urlpatterns = [
     path("recepcion-volvo/", include("recepcion_volvo.urls")),
     path("checklist-entrega/", include("checklist_entrega.urls")),
     path("checklist-general/", include("checklist_general.urls")),
+    path("campanas-meta/", include("meta_ads.urls")),
 ]
 
 if settings.DEBUG:
