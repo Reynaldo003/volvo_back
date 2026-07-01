@@ -32,6 +32,7 @@ LIST_FIELDS = (
     "presupuesto_anuncio",
     "coste_resultados",
     "importe_gastado",
+    "total_messaging_connection",
 )
 
 
@@ -194,6 +195,7 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
             "-presupuesto_anuncio",
             "-coste_resultados",
             "-importe_gastado",
+            "-total_messaging_connection"
         }
 
         if ordering in ordering_permitido:
@@ -224,6 +226,7 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
         data = qs.aggregate(
             total_campanas=Count("id_campana"),
             total_resultados=Sum("total_resultados"),
+            total_messaging_connection=Sum("total_messaging_connection"),
             resultados_fb=Sum("resultados_fb"),
             resultados_ig=Sum("resultados_ig"),
             resultados_wp=Sum("resultados_wp"),

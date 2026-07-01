@@ -24,6 +24,7 @@ class CampanaMetaListSerializer(serializers.ModelSerializer):
             "presupuesto_anuncio",
             "coste_resultados",
             "importe_gastado",
+            "total_messaging_connection",
         )
 
 

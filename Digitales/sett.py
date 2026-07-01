@@ -24,7 +24,7 @@ WHATSAPP_LINES = {
     #},
 
     whatsapp_numero_mariana: {
-        "key": "liz",
+        "key": "mariana",
         "phone_number_id": "1209013795622558",
         "waba_id": "1520374786158708",
         "access_token": whatsapp_token,
@@ -64,19 +64,19 @@ WHATSAPP_TEMPLATE_UI = {
         },
     },
 
-    "prospecto_salesforce_testdrive": {
+    "prospecto_sf_testdrive": {
         "title": "Prueba de Manejo Salesforce",
         "help": "",
         "labels": {
-            "header_1": "Nombre",
+            "body_1": "Nombre",
         },
     },
 
-    "2do_contacto_cotizacion_salesforce": {
+    "2do_contacto_cotizacion_sf": {
         "title": "Segundo Contacto Cotización Salesforce",
         "help": "",
         "labels": {
-            "header_1": "Nombre",
+            "body_1": "Nombre",
         },
     },
 }
