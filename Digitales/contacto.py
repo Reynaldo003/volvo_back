@@ -958,10 +958,13 @@ def obtener_templates_whatsapp(numero_asesor: str) -> list[dict]:
             if str(normalizada.get("status") or "").upper() != "APPROVED":
                 continue
 
+            # Solo mostramos plantillas tipo UTILITY.
+            categoria = str(normalizada.get("category") or "").strip().upper()
+            if categoria != "UTILITY":
+                continue
+
             key = normalizada.get("key") or normalizada.get("name") or ""
 
-            # Ya no ocultamos las que no estén en template_names.
-            # Solo agregamos una bandera para saber si estaba registrada manualmente.
             normalizada["permitida"] = key in permitidas if permitidas else True
             normalizada["registrada_en_settings"] = key in permitidas
 

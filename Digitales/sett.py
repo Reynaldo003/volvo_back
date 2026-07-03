@@ -33,7 +33,7 @@ WHATSAPP_LINES = {
         "agencia": "Volvo",
         "business": "Nuevos",
         "responder_ia": False,
-        "template_names": ["confirmacion_prueba_manejo","prospectos_salesforce_solicitud","prospecto_salesforce_testdrive","2do_contacto_cotizacion_salesforce",],
+        "template_names": ["confirmacion_prueba_manejo", "prospectos_salesforce_solicitud", "contacto_propuesta", "contacto_2_sf", "sf_prueba_manejo",],
     },
 }
 
@@ -64,19 +64,32 @@ WHATSAPP_TEMPLATE_UI = {
         },
     },
 
-    "prospecto_sf_testdrive": {
-        "title": "Prueba de Manejo Salesforce",
+    "contacto_propuesta": {
+        "title": "Contacto Propuesta",
+        "help": "",
+        "labels": {
+            "body_1": "Nombre",
+        },
+        "header": {
+            "type": "image",
+            "link": "https://crmvolvo.grupoautomotrizryr.com/media/plantillas/salesforce_solicitud.jpeg",
+        },
+    },
+
+    "contacto_2_sf": {
+        "title": "Segundo Contacto Salesforce",
         "help": "",
         "labels": {
             "body_1": "Nombre",
         },
     },
 
-    "2do_contacto_cotizacion_sf": {
-        "title": "Segundo Contacto Cotización Salesforce",
+    "sf_prueba_manejo": {
+        "title": "Prueba de Manejo Salesforce",
         "help": "",
         "labels": {
             "body_1": "Nombre",
+            "body_2": "Vehículo de interés",
         },
     },
 }
