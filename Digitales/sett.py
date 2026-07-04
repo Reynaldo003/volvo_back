@@ -33,7 +33,7 @@ WHATSAPP_LINES = {
         "agencia": "Volvo",
         "business": "Nuevos",
         "responder_ia": False,
-        "template_names": ["confirmacion_prueba_manejo", "prospectos_salesforce_solicitud", "contacto_propuesta", "contacto_2_sf", "sf_prueba_manejo",],
+        "template_names": ["confirmacion_prueba_manejo", "prospectos_salesforce_solicitud", "contacto_propuesta", "contacto_2_sf", "sf_prueba_manejo", "sf_3_contacto", "solicitud_sf_prospectos"],
     },
 }
 
@@ -90,6 +90,28 @@ WHATSAPP_TEMPLATE_UI = {
         "labels": {
             "body_1": "Nombre",
             "body_2": "Vehículo de interés",
+        },
+    },
+
+    "solicitud_sf_prospectos": {
+        "title": "Solicitud SalesForce Prospectos",
+        "help": "",
+        "labels": {
+            "body_1": "nombre",
+            "body_2": "hoy",
+            "body_3": "mañana",
+        },
+        "header": {
+            "type": "image",
+            "link": "https://crmvolvo.grupoautomotrizryr.com/media/plantillas/salesforce_solicitud.jpeg",
+        },
+    },
+    
+    "sf_3_contacto": {
+        "title": "Tercer Contacto SalesForce",
+        "help": "",
+        "labels": {
+            "body_1": "Nombre",
         },
     },
 }
