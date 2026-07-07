@@ -710,6 +710,176 @@ def chats_list(request):
 
     return Response(salida, status=status.HTTP_200_OK)
 
+def _safe_raw_dict(raw):
+    if isinstance(raw, dict):
+        return raw
+
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    return {}
+
+
+def _to_int_or_none(value):
+    value = str(value or "").strip()
+
+    if not value or not value.isdigit():
+        return None
+
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _campana_meta_to_dict(campana, pauta_fallback=""):
+    if not campana:
+        return {
+            "id_campana": "",
+            "sucursal": "",
+            "nombre_campana": "",
+            "pauta": pauta_fallback or "",
+            "encontrada": False,
+        }
+
+    sucursal = str(campana.sucursal or "").strip()
+    nombre_campana = str(campana.nombre_campana or "").strip()
+    pauta = f"{sucursal} - {nombre_campana}".strip(" -")
+
+    return {
+        "id_campana": str(campana.id_campana or ""),
+        "sucursal": sucursal,
+        "nombre_campana": nombre_campana,
+        "pauta": pauta or pauta_fallback or "",
+        "encontrada": True,
+    }
+
+
+def _buscar_campana_meta_volvo_por_id(id_campana):
+    id_campana_int = _to_int_or_none(id_campana)
+
+    if id_campana_int is None:
+        return None
+
+    try:
+        return (
+            CampanaMeta.objects.using("sqlserver")
+            .filter(id_campana=id_campana_int)
+            .only("id_campana", "sucursal", "nombre_campana")
+            .first()
+        )
+    except Exception as exc:
+        logger.exception(
+            "ERROR BUSCANDO campana_meta_volvo en contacto | id_campana=%s | error=%s",
+            id_campana,
+            exc,
+        )
+        return None
+
+
+def _buscar_campana_meta_volvo_por_pauta(pauta):
+    pauta = str(pauta or "").strip()
+
+    if not pauta:
+        return None
+
+    nombre_posible = pauta
+
+    if " - " in pauta:
+        nombre_posible = pauta.split(" - ", 1)[1].strip()
+
+    try:
+        qs = CampanaMeta.objects.using("sqlserver").only(
+            "id_campana",
+            "sucursal",
+            "nombre_campana",
+        )
+
+        campana = qs.filter(nombre_campana__iexact=nombre_posible).first()
+
+        if campana:
+            return campana
+
+        return qs.filter(nombre_campana__icontains=nombre_posible).first()
+
+    except Exception as exc:
+        logger.exception(
+            "ERROR BUSCANDO campana_meta_volvo por pauta | pauta=%s | error=%s",
+            pauta,
+            exc,
+        )
+        return None
+
+
+def _extraer_id_campana_de_atribucion(raw):
+    raw = _safe_raw_dict(raw)
+
+    atribucion = raw.get("atribucion_meta") or {}
+
+    if not isinstance(atribucion, dict):
+        return ""
+
+    return str(
+        atribucion.get("id_campana")
+        or atribucion.get("campaign_id")
+        or ""
+    ).strip()
+
+
+def _obtener_campana_meta_para_contacto(*, expediente, tel, numero_asesor):
+    pauta_actual = str(getattr(expediente, "pauta", "") or "").strip()
+
+    salida_default = {
+        "id_campana": "",
+        "sucursal": "",
+        "nombre_campana": "",
+        "pauta": pauta_actual,
+        "encontrada": False,
+        "origen": "expediente_pauta" if pauta_actual else "",
+    }
+
+    if not expediente:
+        return salida_default
+
+    # 1. Buscar id_campana en los mensajes entrantes que tengan raw["atribucion_meta"].
+    mensajes_atribucion = (
+        MensajeWhatsApp.objects
+        .filter(
+            telefono=tel,
+            numero_asesor=numero_asesor,
+            direction=MensajeWhatsApp.Direccion.IN,
+        )
+        .exclude(raw={})
+        .order_by("-created_at", "-id")[:30]
+    )
+
+    for mensaje in mensajes_atribucion:
+        id_campana = _extraer_id_campana_de_atribucion(mensaje.raw)
+
+        if not id_campana:
+            continue
+
+        campana = _buscar_campana_meta_volvo_por_id(id_campana)
+
+        if campana:
+            data = _campana_meta_to_dict(campana, pauta_fallback=pauta_actual)
+            data["origen"] = "mensaje_raw_atribucion_meta"
+            return data
+
+    # 2. Fallback: si ya tienes expediente.pauta, buscarla contra campanas_meta_volvo.
+    campana_por_pauta = _buscar_campana_meta_volvo_por_pauta(pauta_actual)
+
+    if campana_por_pauta:
+        data = _campana_meta_to_dict(campana_por_pauta, pauta_fallback=pauta_actual)
+        data["origen"] = "expediente_pauta_match"
+        return data
+
+    return salida_default
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def contacto_por_telefono(request):
@@ -788,11 +958,28 @@ def contacto_por_telefono(request):
             context={"request": request},
         ).data
 
+        prospecto_data = ProspectoSerializer(expediente).data if expediente else None
+
+        if prospecto_data is not None:
+            campana_meta = _obtener_campana_meta_para_contacto(
+                expediente=expediente,
+                tel=tel,
+                numero_asesor=numero_asesor,
+            )
+
+            prospecto_data["campana_meta"] = campana_meta
+            prospecto_data["campana_meta_nombre"] = campana_meta.get("nombre_campana") or ""
+            prospecto_data["campana_meta_sucursal"] = campana_meta.get("sucursal") or ""
+            prospecto_data["campana_meta_id"] = campana_meta.get("id_campana") or ""
+
+            if campana_meta.get("pauta") and not prospecto_data.get("pauta"):
+                prospecto_data["pauta"] = campana_meta.get("pauta")
+
         return Response(
             {
                 "ok": True,
                 "numero_asesor_activo": numero_asesor,
-                "prospecto": ProspectoSerializer(expediente).data if expediente else None,
+                "prospecto": prospecto_data,
                 "mensajes": serialized,
                 "messages": serialized,
                 "paginacion": {
