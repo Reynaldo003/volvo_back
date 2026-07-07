@@ -1411,7 +1411,7 @@ def campanas_meta_recientes(request):
         desde = timezone.now().date() - timedelta(days=days)
 
         qs_recientes = (
-            CampanaMeta.objects.using("sqlserver")
+            CampanaMeta.objects.using("sqlserver_meta")
             .filter(
                 Q(inicio_campana__gte=desde)
                 | Q(fin_campana__gte=desde)
@@ -1424,7 +1424,7 @@ def campanas_meta_recientes(request):
 
         if not qs_recientes.exists():
             qs = (
-                CampanaMeta.objects.using("sqlserver")
+                CampanaMeta.objects.using("sqlserver_meta")
                 .all()
                 .order_by("-inicio_campana", "-fin_campana", "sucursal", "nombre_campana")
             )
