@@ -1402,28 +1402,77 @@ def plantillas_whatsapp_view(request):
 @permission_classes([AllowAny])
 def campanas_meta_recientes(request):
     try:
-        days = _int_param(request, "days", default=30, min_value=1, max_value=365)
+        days = _int_param(request, "days", default=180, min_value=1, max_value=730)
         desde = timezone.now().date() - timedelta(days=days)
 
-        qs = (
-            CampanaMeta.objects.using("sqlserver_meta")
-            .filter(Q(inicio_campana__gte=desde) | Q(fin_campana__gte=desde))
-            .order_by("-inicio_campana")[:200]
+        qs_recientes = (
+            CampanaMeta.objects
+            .filter(
+                Q(inicio_campana__gte=desde)
+                | Q(fin_campana__gte=desde)
+                | Q(fin_campana__isnull=True)
+            )
+            .order_by("-inicio_campana", "-fin_campana", "sucursal", "nombre_campana")
         )
 
-        data = [
-            {
-                "id_campana": item.id_campana,
-                "sucursal": item.sucursal,
-                "nombre_campana": item.nombre_campana,
-                "inicio_campana": item.inicio_campana.isoformat() if item.inicio_campana else None,
-                "fin_campana": item.fin_campana.isoformat() if item.fin_campana else None,
-            }
-            for item in qs
-        ]
+        # Si no hay campañas recientes, mostramos las últimas disponibles.
+        qs = qs_recientes
+        if not qs_recientes.exists():
+            qs = (
+                CampanaMeta.objects
+                .all()
+                .order_by("-inicio_campana", "-fin_campana", "sucursal", "nombre_campana")
+            )
 
-        return Response({"ok": True, "results": data}, status=status.HTTP_200_OK)
+        vistos = set()
+        items = []
+
+        for campana in qs[:700]:
+            sucursal = str(campana.sucursal or "").strip()
+            nombre_campana = str(campana.nombre_campana or "").strip()
+
+            label = f"{sucursal} - {nombre_campana}".strip(" -")
+
+            if not label:
+                continue
+
+            key = label.lower()
+
+            if key in vistos:
+                continue
+
+            vistos.add(key)
+
+            items.append({
+                "value": label,
+                "label": label,
+                "id_campana": str(campana.id_campana),
+                "sucursal": sucursal,
+                "nombre_campana": nombre_campana,
+                "inicio_campana": campana.inicio_campana.isoformat() if campana.inicio_campana else None,
+                "fin_campana": campana.fin_campana.isoformat() if campana.fin_campana else None,
+            })
+
+        return Response(
+            {
+                "ok": True,
+                "items": items,
+                "results": items,
+                "source": "campanas_meta_volvo",
+            },
+            status=status.HTTP_200_OK,
+        )
 
     except Exception as exc:
-        logger.warning("No se pudieron consultar campañas Meta Volvo: %s", exc)
-        return Response({"ok": True, "results": [], "warning": str(exc)}, status=status.HTTP_200_OK)
+        logger.exception("ERROR CARGANDO campanas_meta_volvo: %s", exc)
+
+        return Response(
+            {
+                "ok": False,
+                "items": [],
+                "results": [],
+                "error": str(exc),
+                "source": "campanas_meta_volvo",
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )

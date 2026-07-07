@@ -191,7 +191,7 @@ class CampanaMeta(models.Model):
     fin_campana = models.DateField(null=True, blank=True)
 
     class Meta:
-        db_table = "campanas_meta"
+        db_table = "campanas_meta_volvo"
         managed = False
 
 
