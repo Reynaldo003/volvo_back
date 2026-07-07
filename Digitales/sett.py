@@ -6,6 +6,26 @@ whatsapp_token = 'EAAOw8lmcSSEBRni7VfZCjzFapQI2szs6GNaImaXQqXDbVYJqjGPZBrVGHPme6
 GRAPH_VERSION = "v22.0"
 WHATSAPP_WABA_ID_DEFAULT = "1520374786158708"
 
+META_ADS_VOLVO = {
+    "app_id": "27866052196326353",
+    "app_secret": "16582a34fd8d189714f34dfcfceb383b",
+    "access_token": "EAGMABt50W9EBR1AG3kVS2roAUTYZBCMP7xUfYUX05POhpEVpVJFl8LjInvi8GeIMkLdvXsZAViJgoVuTE39QbuBY6hqwTKv8nTlkX2c5mU79vUg8jk7N5O4b09mKmuozyUVMeooqGi95CDf6R7wqFEhATKHg7ntTzJszMIyYLZCbG4UZCVZCsR9FJbr6v2QzLkly5heP5dYraTRgawm5t",
+    "ad_account_id": "act_3680920252161006",
+}
+
+
+def meta_ads_linea(cfg: dict) -> dict:
+    return {
+        "meta_ads_app_id": cfg["app_id"],
+        "meta_ads_app_secret": cfg["app_secret"],
+        "meta_ads_access_token": cfg["access_token"],
+        "meta_ads_ad_account_id": cfg["ad_account_id"],
+        "meta_ads_ad_account_ids": [cfg["ad_account_id"]],
+    }
+
+
+META_ADS_ACCESS_TOKEN = ""
+
 whatsapp_url_mariana = 'https://graph.facebook.com/v22.0/1209013795622558/messages'
 whatsapp_numero_default = "522211092815"
 whatsapp_numero_mariana = "522211092815"
@@ -34,6 +54,7 @@ WHATSAPP_LINES = {
         "business": "Nuevos",
         "responder_ia": False,
         "template_names": ["confirmacion_prueba_manejo", "prospectos_salesforce_solicitud", "contacto_propuesta", "contacto_2_sf", "sf_prueba_manejo", "sf_3_contacto", "solicitud_sf_prospectos"],
+        **meta_ads_linea(META_ADS_VOLVO),
     },
 }
 

@@ -1,3 +1,4 @@
+#volvo
 # Digitales/views.py
 import json
 import logging
@@ -39,6 +40,7 @@ from .contacto import (
     replace_start,
     subir_media_whatsapp,
 )
+from .atribucion_meta import aplicar_pauta_desde_referencia_meta
 
 try:
     from .sett import WHATSAPP_LINES, token as VERIFY_TOKEN
@@ -374,6 +376,34 @@ def _response_meta_error(error: MetaAPIError, *, numero_asesor: str = "", extra=
 
     return Response(payload, status=http_status)
 
+def _aplicar_atribucion_meta_segura(
+    *,
+    expediente,
+    mensaje_whatsapp,
+    numero_asesor,
+    telefono,
+    wa_id,
+):
+    try:
+        return aplicar_pauta_desde_referencia_meta(
+            expediente=expediente,
+            mensaje_whatsapp=mensaje_whatsapp,
+            numero_asesor=numero_asesor,
+        )
+    except Exception as error:
+        logger.exception(
+            "ERROR ATRIBUCION META VOLVO | numero_asesor=%s telefono=%s wa_id=%s error=%s",
+            numero_asesor,
+            telefono,
+            wa_id,
+            str(error),
+        )
+
+        return {
+            "ok": False,
+            "motivo": "error_atribucion_meta",
+            "error": str(error),
+        }
 
 # ── Vistas simples ───────────────────────────────────────────────────────────
 
@@ -498,14 +528,23 @@ def webhook(request):
                     if not cliente or not expediente:
                         logger.warning("WEBHOOK VOLVO OMITIDO SIN CLIENTE O EXPEDIENTE | tel=%s", tel)
                         continue
-
+                    
                     expediente.touch_mensaje_cliente(save_now=True)
+
+                    resultado_atribucion_meta = _aplicar_atribucion_meta_segura(
+                        expediente=expediente,
+                        mensaje_whatsapp=msg,
+                        numero_asesor=numero_asesor,
+                        telefono=tel,
+                        wa_id=wa_id,
+                    )
 
                     raw_msg = dict(msg)
                     raw_msg["numero_asesor"] = numero_asesor
                     raw_msg["phone_number_id"] = metadata.get("phone_number_id", "")
                     raw_msg["display_phone_number"] = metadata.get("display_phone_number", "")
                     raw_msg["profile_name"] = profile_name
+                    raw_msg["atribucion_meta"] = resultado_atribucion_meta
 
                     mensaje_entrante, created = MensajeWhatsApp.objects.get_or_create(
                         wa_message_id=wa_id,
