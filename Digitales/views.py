@@ -1402,7 +1402,12 @@ def plantillas_whatsapp_view(request):
 @permission_classes([AllowAny])
 def campanas_meta_recientes(request):
     try:
-        days = _int_param(request, "days", default=180, min_value=1, max_value=730)
+        try:
+            days = int(request.query_params.get("days", "180"))
+        except (TypeError, ValueError):
+            days = 180
+
+        days = max(1, min(days, 730))
         desde = timezone.now().date() - timedelta(days=days)
 
         qs_recientes = (
@@ -1415,8 +1420,8 @@ def campanas_meta_recientes(request):
             .order_by("-inicio_campana", "-fin_campana", "sucursal", "nombre_campana")
         )
 
-        # Si no hay campañas recientes, mostramos las últimas disponibles.
         qs = qs_recientes
+
         if not qs_recientes.exists():
             qs = (
                 CampanaMeta.objects
@@ -1471,8 +1476,8 @@ def campanas_meta_recientes(request):
                 "ok": False,
                 "items": [],
                 "results": [],
-                "error": str(exc),
                 "source": "campanas_meta_volvo",
+                "error": str(exc),
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
