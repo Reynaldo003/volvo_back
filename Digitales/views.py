@@ -767,7 +767,7 @@ def _buscar_campana_meta_volvo_por_id(id_campana):
 
     try:
         return (
-            CampanaMeta.objects.using("sqlserver")
+            CampanaMeta.objects.using("sqlserver_meta")
             .filter(id_campana=id_campana_int)
             .only("id_campana", "sucursal", "nombre_campana")
             .first()
@@ -793,7 +793,7 @@ def _buscar_campana_meta_volvo_por_pauta(pauta):
         nombre_posible = pauta.split(" - ", 1)[1].strip()
 
     try:
-        qs = CampanaMeta.objects.using("sqlserver").only(
+        qs = CampanaMeta.objects.using("sqlserver_meta").only(
             "id_campana",
             "sucursal",
             "nombre_campana",

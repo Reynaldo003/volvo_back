@@ -155,7 +155,7 @@ def buscar_campana_por_id_campana(id_campana):
 
     try:
         return (
-            CampanaMeta.objects.using("sqlserver")
+            CampanaMeta.objects.using("sqlserver_meta")
             .filter(id_campana=id_campana_int)
             .only("id_campana", "sucursal", "nombre_campana")
             .first()
@@ -177,7 +177,7 @@ def buscar_mapeo_por_id_fuente(id_fuente: str):
 
     try:
         return (
-            MapeoFuenteMeta.objects.using("sqlserver")
+            MapeoFuenteMeta.objects.using("sqlserver_meta")
             .filter(id_fuente=id_fuente)
             .first()
         )
@@ -226,7 +226,7 @@ def guardar_mapeo_fuente_meta(
 
     try:
         obj = (
-            MapeoFuenteMeta.objects.using("sqlserver")
+            MapeoFuenteMeta.objects.using("sqlserver_meta")
             .filter(id_fuente=id_fuente)
             .first()
         )
@@ -236,7 +236,7 @@ def guardar_mapeo_fuente_meta(
                 setattr(obj, campo, valor)
 
             obj.save(
-                using="sqlserver",
+                using="sqlserver_meta",
                 update_fields=list(valores.keys()),
             )
             return obj
@@ -246,7 +246,7 @@ def guardar_mapeo_fuente_meta(
             creado_en=ahora,
             **valores,
         )
-        obj.save(using="sqlserver", force_insert=True)
+        obj.save(using="sqlserver_meta", force_insert=True)
 
         return obj
 
