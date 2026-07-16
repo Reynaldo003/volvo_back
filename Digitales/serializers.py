@@ -234,6 +234,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "canal_contacto",
             "pauta",
             "estado",
+            "motivo_descalificacion",
             "auto_interes",
             "enganche_monto",
             "presupuesto_mensual",
@@ -243,6 +244,11 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "plazo_compra",
             "uso_vehiculo",
             "comprobacion_ingresos",
+            "id_cotizacion",
+            "folio_solicitud_credito",
+            "solicitud_credito_estado",
+            "vin_facturado",
+            "vin_estatus_entrega",
             "asesor_digital",
             "asesor_ventas",
             "comentarios",
@@ -270,6 +276,38 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "ultima_cita_agendada",
             "asistencia",
         ]
+
+    def validate(self, attrs):
+        estado_actual = getattr(self.instance, "estado", "") if self.instance else ""
+        motivo_actual = getattr(self.instance, "motivo_descalificacion", "") if self.instance else ""
+
+        estado = str(attrs.get("estado", estado_actual) or "").strip()
+        motivo = str(attrs.get("motivo_descalificacion", motivo_actual) or "").strip()
+
+        if estado.lower() == "descalificado":
+            if not motivo:
+                raise serializers.ValidationError({
+                    "motivo_descalificacion": "Selecciona el motivo de descalificación."
+                })
+            attrs["motivo_descalificacion"] = motivo
+        else:
+            # Evita conservar un motivo antiguo si el prospecto vuelve a otro estado.
+            attrs["motivo_descalificacion"] = ""
+
+        for campo in (
+            "id_cotizacion",
+            "folio_solicitud_credito",
+            "solicitud_credito_estado",
+            "vin_facturado",
+            "vin_estatus_entrega",
+        ):
+            if campo in attrs:
+                attrs[campo] = str(attrs.get(campo) or "").strip()
+
+        if "vin_facturado" in attrs:
+            attrs["vin_facturado"] = attrs["vin_facturado"].upper()
+
+        return attrs
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

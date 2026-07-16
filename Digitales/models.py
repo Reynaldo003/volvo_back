@@ -19,6 +19,7 @@ class ExpedienteDigital(models.Model):
     canal_contacto = models.CharField(max_length=120, blank=True, default="")
     pauta = models.CharField(max_length=500, blank=True, default="")
     estado = models.CharField(max_length=120, blank=True, default="")
+    motivo_descalificacion = models.CharField(max_length=255, blank=True, default="")
     auto_interes = models.CharField(max_length=255, blank=True, default="")
 
     enganche_monto = models.PositiveIntegerField(null=True, blank=True)
@@ -29,6 +30,13 @@ class ExpedienteDigital(models.Model):
     plazo_compra = models.CharField(max_length=120, blank=True, default="")
     uso_vehiculo = models.CharField(max_length=255, blank=True, default="")
     comprobacion_ingresos = models.CharField(max_length=200, blank=True, default="")
+
+    # Seguimiento comercial, equivalente al módulo Volkswagen.
+    id_cotizacion = models.CharField(max_length=80, blank=True, default="")
+    folio_solicitud_credito = models.CharField(max_length=120, blank=True, default="")
+    solicitud_credito_estado = models.CharField(max_length=30, blank=True, default="")
+    vin_facturado = models.CharField(max_length=32, blank=True, default="")
+    vin_estatus_entrega = models.CharField(max_length=30, blank=True, default="")
 
     asesor_digital = models.CharField(max_length=200, blank=True, default="")
     asesor_ventas = models.CharField(max_length=200, blank=True, default="")

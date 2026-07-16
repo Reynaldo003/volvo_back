@@ -80,7 +80,19 @@ class ProspectosViewSet(viewsets.ModelViewSet):
                 | Q(canal_contacto__icontains=search)
                 | Q(pauta__icontains=search)
                 | Q(estado__icontains=search)
+                | Q(motivo_descalificacion__icontains=search)
                 | Q(auto_interes__icontains=search)
+                | Q(buro_estado__icontains=search)
+                | Q(forma_pago__icontains=search)
+                | Q(tipo_cliente__icontains=search)
+                | Q(plazo_compra__icontains=search)
+                | Q(uso_vehiculo__icontains=search)
+                | Q(comprobacion_ingresos__icontains=search)
+                | Q(id_cotizacion__icontains=search)
+                | Q(folio_solicitud_credito__icontains=search)
+                | Q(solicitud_credito_estado__icontains=search)
+                | Q(vin_facturado__icontains=search)
+                | Q(vin_estatus_entrega__icontains=search)
                 | Q(asesor_digital__icontains=search)
                 | Q(asesor_ventas__icontains=search)
                 | Q(comentarios__icontains=search)
@@ -235,13 +247,24 @@ def _get_or_create_cliente_y_expediente(*, tel: str, profile_name: str = "", num
         "asesor_digital": (cfg_linea.get("asesor_digital") or "").strip(),
     }
 
-    exp, _ = ExpedienteDigital.objects.get_or_create(cliente=cliente, defaults=defaults)
+    exp, creado = ExpedienteDigital.objects.get_or_create(
+        cliente=cliente,
+        defaults=defaults,
+    )
 
+    # Estos valores solamente sirven para inicializar un expediente nuevo.
+    # Si el usuario ya modificó el canal, agencia, business, estado o asesor
+    # desde el CRM, abrir el chat no debe volver a sobrescribir esos cambios.
     cambios = []
-    for field, value in defaults.items():
-        if value and getattr(exp, field, "") != value:
-            setattr(exp, field, value)
-            cambios.append(field)
+
+    if not creado:
+        for field, value in defaults.items():
+            valor_actual = str(getattr(exp, field, "") or "").strip()
+            valor_default = str(value or "").strip()
+
+            if valor_default and not valor_actual:
+                setattr(exp, field, valor_default)
+                cambios.append(field)
 
     if cambios:
         cambios.append("actualizado")
