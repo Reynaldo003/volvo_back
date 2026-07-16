@@ -903,6 +903,45 @@ def _obtener_campana_meta_para_contacto(*, expediente, tel, numero_asesor):
 
     return salida_default
 
+
+def _obtener_origen_preview_para_contacto(*, expediente, tel, numero_asesor):
+    """
+    Recupera la referencia del anuncio desde los primeros mensajes entrantes.
+
+    Esto evita depender de que el mensaje original esté incluido en la página
+    actual del historial. No realiza llamadas a Meta: usa únicamente el raw que
+    ya quedó almacenado por el webhook.
+    """
+    if not expediente:
+        return None
+
+    serializer = WhatsAppMessageSerializer()
+
+    mensajes_iniciales = (
+        MensajeWhatsApp.objects
+        .filter(
+            telefono=tel,
+            numero_asesor=numero_asesor,
+            direction=MensajeWhatsApp.Direccion.IN,
+        )
+        .only("id", "wa_message_id", "direction", "raw", "created_at")
+        .order_by("created_at", "id")[:40]
+    )
+
+    for mensaje in mensajes_iniciales:
+        preview = serializer.get_origin_preview(mensaje)
+
+        if not preview:
+            continue
+
+        return {
+            **preview,
+            "message_id": mensaje.wa_message_id or str(mensaje.id),
+            "created_at": mensaje.created_at.isoformat() if mensaje.created_at else None,
+        }
+
+    return None
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def contacto_por_telefono(request):
@@ -994,6 +1033,13 @@ def contacto_por_telefono(request):
             prospecto_data["campana_meta_nombre"] = campana_meta.get("nombre_campana") or ""
             prospecto_data["campana_meta_sucursal"] = campana_meta.get("sucursal") or ""
             prospecto_data["campana_meta_id"] = campana_meta.get("id_campana") or ""
+
+            origen_preview = _obtener_origen_preview_para_contacto(
+                expediente=expediente,
+                tel=tel,
+                numero_asesor=numero_asesor,
+            )
+            prospecto_data["origen_preview"] = origen_preview
 
             if campana_meta.get("pauta") and not prospecto_data.get("pauta"):
                 prospecto_data["pauta"] = campana_meta.get("pauta")

@@ -56,6 +56,7 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
     is_media = serializers.SerializerMethodField()
     reply_to_message_id = serializers.SerializerMethodField()
     attachments = serializers.SerializerMethodField()
+    origin_preview = serializers.SerializerMethodField()
 
     class Meta:
         model = MensajeWhatsApp
@@ -78,6 +79,7 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
             "is_template",
             "is_media",
             "attachments",
+            "origin_preview",
         ]
 
     def get_mine(self, obj):
@@ -131,6 +133,97 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
             path = f"{path}?numero_asesor={numero_asesor}"
 
         return absolute_backend_url(path)
+
+    @staticmethod
+    def _safe_dict(value):
+        return value if isinstance(value, dict) else {}
+
+    def get_origin_preview(self, obj):
+        """
+        Normaliza la referencia Click-to-WhatsApp para que el frontend pueda
+        dibujar la tarjeta del anuncio dentro de la burbuja del primer mensaje.
+
+        Se mantienen fallbacks porque algunos registros antiguos guardaron el
+        último webhook dentro de raw["ultimo_webhook_payload"].
+        """
+        if obj.direction != MensajeWhatsApp.Direccion.IN:
+            return None
+
+        raw = self._safe_dict(obj.raw)
+        ultimo_webhook = self._safe_dict(raw.get("ultimo_webhook_payload"))
+
+        referral_candidates = [
+            self._safe_dict(raw.get("referral")),
+            self._safe_dict(self._safe_dict(raw.get("context")).get("referral")),
+            self._safe_dict(ultimo_webhook.get("referral")),
+            self._safe_dict(self._safe_dict(ultimo_webhook.get("context")).get("referral")),
+        ]
+        referral = next((item for item in referral_candidates if item), {})
+
+        attribution_candidates = [
+            self._safe_dict(raw.get("atribucion_meta")),
+            self._safe_dict(ultimo_webhook.get("atribucion_meta")),
+        ]
+        atribucion = next((item for item in attribution_candidates if item), {})
+
+        nombre_campana = str(
+            atribucion.get("nombre_campana")
+            or atribucion.get("campaign_name")
+            or ""
+        ).strip()
+        nombre_anuncio = str(
+            atribucion.get("nombre_anuncio")
+            or referral.get("headline")
+            or ""
+        ).strip()
+        sucursal = str(atribucion.get("sucursal") or "").strip()
+        pauta = str(
+            atribucion.get("pauta")
+            or (f"{sucursal} - {nombre_campana}" if sucursal and nombre_campana else "")
+            or nombre_campana
+            or nombre_anuncio
+            or ""
+        ).strip()
+
+        headline = str(
+            referral.get("headline")
+            or nombre_anuncio
+            or nombre_campana
+            or pauta
+            or ""
+        ).strip()
+        body = str(
+            referral.get("body")
+            or atribucion.get("nombre_conjunto")
+            or ""
+        ).strip()
+        source_url = str(referral.get("source_url") or "").strip()
+        image_url = str(
+            referral.get("image_url")
+            or referral.get("thumbnail_url")
+            or referral.get("video_thumbnail_url")
+            or ""
+        ).strip()
+
+        if not any((pauta, headline, source_url, image_url)):
+            return None
+
+        return {
+            "pauta": pauta or headline,
+            "nombre_campana": nombre_campana,
+            "nombre_anuncio": nombre_anuncio,
+            "sucursal": sucursal,
+            "headline": headline or pauta,
+            "body": body,
+            "source_url": source_url,
+            "image_url": image_url,
+            "media_type": str(referral.get("media_type") or "").strip(),
+            "source_type": str(referral.get("source_type") or "").strip(),
+            "source_id": str(referral.get("source_id") or "").strip(),
+            "origen": str(atribucion.get("motivo") or "meta_ads").strip(),
+            "referral": referral,
+            "atribucion": atribucion,
+        }
 
     def get_attachments(self, obj):
         raw = obj.raw or {}
@@ -425,3 +518,4 @@ class ProspectoSerializer(serializers.ModelSerializer):
 
         instance.save()
         return instance
+w
