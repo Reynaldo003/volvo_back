@@ -518,4 +518,3 @@ class ProspectoSerializer(serializers.ModelSerializer):
 
         instance.save()
         return instance
-w
