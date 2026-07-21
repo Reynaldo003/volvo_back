@@ -18,10 +18,11 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status, viewsets
 from rest_framework.decorators import api_view, authentication_classes, parser_classes, permission_classes
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from citas.models import ClienteComercial, normaliza_tel_mx
+from usuarios.authentication import SignedUserAuthentication
 
 from .models import CampanaMeta, ExpedienteDigital, LecturaWhatsApp, MensajeWhatsApp
 from .serializers import ProspectoSerializer, WhatsAppMessageSerializer
@@ -41,6 +42,17 @@ from .contacto import (
     subir_media_whatsapp,
 )
 from .atribucion_meta import aplicar_pauta_desde_referencia_meta
+from .IA import responder_mensaje_automatico
+from .ia_config import obtener_estado_ia_conversacion
+
+from .plantillas_meta import (
+    REGLAS_UTILITY,
+    analizar_estructura_plantilla,
+    crear_plantilla_meta,
+    editar_plantilla_meta,
+    eliminar_plantilla_meta,
+    listar_plantillas_meta,
+)
 
 try:
     from .sett import WHATSAPP_LINES, token as VERIFY_TOKEN
@@ -52,8 +64,9 @@ logger = logging.getLogger(__name__)
 
 
 class ProspectosViewSet(viewsets.ModelViewSet):
+    authentication_classes = [SignedUserAuthentication]
+    permission_classes = [IsAuthenticated]
     serializer_class = ProspectoSerializer
-    permission_classes = [AllowAny]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get_queryset(self):
@@ -174,11 +187,41 @@ def _primer_numero_asesor():
     return next(iter(WHATSAPP_LINES.keys()), "")
 
 
+def _usuario_es_admin_request(request) -> bool:
+    user = getattr(request, "user", None)
+    rol = getattr(user, "rol", None) if user else None
+    nombre_rol = str(
+        getattr(rol, "nombre", "")
+        or (rol if isinstance(rol, str) else "")
+        or ""
+    ).strip().lower()
+    return nombre_rol in ("administrador", "admin")
+
+
+def _numero_usuario_request(request) -> str:
+    user = getattr(request, "user", None)
+    numero = normaliza_tel_mx(getattr(user, "telefono", "") or "") if user else ""
+    return numero if numero in WHATSAPP_LINES else ""
+
+
 def _get_cfg_request(request):
-    numero_asesor = normaliza_tel_mx(_request_value(request, "numero_asesor", "") or "")
+    numero_param = normaliza_tel_mx(_request_value(request, "numero_asesor", "") or "")
+    numero_param = numero_param if numero_param in WHATSAPP_LINES else ""
+    numero_usuario = _numero_usuario_request(request)
+
+    if _usuario_es_admin_request(request):
+        numero_asesor = numero_param or numero_usuario or _primer_numero_asesor()
+    else:
+        numero_asesor = numero_usuario
+
+        # Compatibilidad temporal mientras Volvo conserva una sola línea.
+        if not numero_asesor and len(WHATSAPP_LINES) == 1:
+            numero_asesor = numero_param or _primer_numero_asesor()
 
     if not numero_asesor:
-        numero_asesor = _primer_numero_asesor()
+        raise ValueError(
+            "El usuario no tiene una línea de WhatsApp válida asignada en usuarios_volvo."
+        )
 
     cfg = obtener_config_linea(numero_asesor=numero_asesor)
     return cfg, cfg["numero_asesor"]
@@ -428,6 +471,86 @@ def _aplicar_atribucion_meta_segura(
             "error": str(error),
         }
 
+
+
+def _debe_responder_con_ia(numero_asesor: str, expediente=None) -> bool:
+    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+    cfg_linea = WHATSAPP_LINES.get(numero_asesor, {})
+
+    if not cfg_linea.get("responder_ia", False):
+        return False
+
+    estado_ia = obtener_estado_ia_conversacion(
+        numero_asesor=numero_asesor,
+        expediente=expediente,
+    )
+
+    if not estado_ia.get("puede_responder"):
+        logger.info(
+            "IA VOLVO OMITIDA | linea=%s expediente=%s bloqueos=%s",
+            numero_asesor,
+            getattr(expediente, "id", None),
+            estado_ia.get("bloqueos", []),
+        )
+        return False
+
+    return True
+
+
+def _ya_existe_respuesta_ia_para_entrada(
+    numero_asesor: str,
+    wa_message_id_entrante: str,
+) -> bool:
+    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+    wa_message_id_entrante = str(wa_message_id_entrante or "").strip()
+
+    if not numero_asesor or not wa_message_id_entrante:
+        return False
+
+    return MensajeWhatsApp.objects.filter(
+        numero_asesor=numero_asesor,
+        direction=MensajeWhatsApp.Direccion.OUT,
+        raw__reply_to=wa_message_id_entrante,
+    ).exists()
+
+
+def _procesar_respuesta_ia_en_segundo_plano(
+    *,
+    wa_from: str,
+    numero_asesor: str,
+    profile_name: str,
+    texto_usuario: str,
+    wa_message_id_entrante: str,
+    raw_message: dict,
+):
+    close_old_connections()
+
+    try:
+        if _ya_existe_respuesta_ia_para_entrada(
+            numero_asesor,
+            wa_message_id_entrante,
+        ):
+            return
+
+        responder_mensaje_automatico(
+            wa_from=wa_from,
+            profile_name=profile_name,
+            texto_usuario=texto_usuario,
+            wa_message_id_entrante=wa_message_id_entrante,
+            raw_message=raw_message,
+            numero_asesor=numero_asesor,
+        )
+    except Exception as exc:
+        logger.exception(
+            "ERROR IA VOLVO | linea=%s cliente=%s wa_id=%s error=%s",
+            numero_asesor,
+            wa_from,
+            wa_message_id_entrante,
+            exc,
+        )
+    finally:
+        close_old_connections()
+
 # ── Vistas simples ───────────────────────────────────────────────────────────
 
 def bienvenido(request):
@@ -623,6 +746,21 @@ def webhook(request):
                                 )
                                 hilo_media.start()
 
+                    if created and _debe_responder_con_ia(numero_asesor, expediente):
+                        hilo_ia = threading.Thread(
+                            target=_procesar_respuesta_ia_en_segundo_plano,
+                            kwargs={
+                                "wa_from": wa_from,
+                                "numero_asesor": numero_asesor,
+                                "profile_name": profile_name,
+                                "texto_usuario": text,
+                                "wa_message_id_entrante": wa_id,
+                                "raw_message": raw_msg,
+                            },
+                            daemon=True,
+                        )
+                        hilo_ia.start()
+
                 statuses = value.get("statuses") or []
 
                 for status_payload in statuses:
@@ -670,7 +808,8 @@ def webhook(request):
 # ── API de chats/contacto ────────────────────────────────────────────────────
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@authentication_classes([SignedUserAuthentication])
+@permission_classes([IsAuthenticated])
 def chats_list(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
@@ -728,10 +867,12 @@ def chats_list(request):
                 "last_time": _format_time(ultimo.created_at),
                 "last_created_at": _iso_or_none(ultimo.created_at),
                 "numero_asesor": numero_asesor,
+                "ia_estado": obtener_estado_ia_conversacion(numero_asesor=numero_asesor, expediente=expediente) if expediente else None,
             }
         )
 
     return Response(salida, status=status.HTTP_200_OK)
+
 
 def _safe_raw_dict(raw):
     if isinstance(raw, dict):
@@ -943,7 +1084,8 @@ def _obtener_origen_preview_para_contacto(*, expediente, tel, numero_asesor):
     return None
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@authentication_classes([SignedUserAuthentication])
+@permission_classes([IsAuthenticated])
 def contacto_por_telefono(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
@@ -1048,6 +1190,7 @@ def contacto_por_telefono(request):
             {
                 "ok": True,
                 "numero_asesor_activo": numero_asesor,
+                "ia_estado": obtener_estado_ia_conversacion(tel=tel, numero_asesor=numero_asesor, expediente=expediente),
                 "prospecto": prospecto_data,
                 "mensajes": serialized,
                 "messages": serialized,
@@ -1072,7 +1215,8 @@ def contacto_por_telefono(request):
         )
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@authentication_classes([SignedUserAuthentication])
+@permission_classes([IsAuthenticated])
 def contacto_updates(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
@@ -1159,7 +1303,8 @@ def contacto_updates(request):
         )
 
 @api_view(["POST"])
-@permission_classes([AllowAny])
+@authentication_classes([SignedUserAuthentication])
+@permission_classes([IsAuthenticated])
 def mark_read_view(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
@@ -1179,7 +1324,8 @@ def mark_read_view(request):
 
 
 @api_view(["POST"])
-@permission_classes([AllowAny])
+@authentication_classes([SignedUserAuthentication])
+@permission_classes([IsAuthenticated])
 def mark_unread_view(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
@@ -1201,8 +1347,9 @@ def mark_unread_view(request):
 # ── Envíos WhatsApp ──────────────────────────────────────────────────────────
 
 @api_view(["POST"])
+@authentication_classes([SignedUserAuthentication])
 @parser_classes([JSONParser])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def enviar_mensaje_view(request):
     numero_asesor = ""
     to = ""
@@ -1271,8 +1418,9 @@ def enviar_mensaje_view(request):
 
 
 @api_view(["POST"])
+@authentication_classes([SignedUserAuthentication])
 @parser_classes([MultiPartParser, FormParser])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def enviar_media_view(request):
     numero_asesor = ""
     to = ""
@@ -1392,8 +1540,9 @@ def enviar_media_view(request):
 
 
 @api_view(["POST"])
+@authentication_classes([SignedUserAuthentication])
 @parser_classes([JSONParser])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def enviar_plantilla_view(request):
     numero_asesor = ""
     to = ""
@@ -1552,8 +1701,9 @@ def enviar_plantilla_view(request):
         )
 
 @api_view(["PATCH", "POST"])
+@authentication_classes([SignedUserAuthentication])
 @parser_classes([JSONParser])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def editar_mensaje_view(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
@@ -1597,6 +1747,7 @@ def editar_mensaje_view(request):
 # ── Media, plantillas y campañas ─────────────────────────────────────────────
 
 @api_view(["GET"])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def media_proxy_view(request, media_id: str):
     numero_asesor = normaliza_tel_mx(request.query_params.get("numero_asesor", ""))
@@ -1625,7 +1776,8 @@ def media_proxy_view(request, media_id: str):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@authentication_classes([SignedUserAuthentication])
+@permission_classes([IsAuthenticated])
 def plantillas_whatsapp_view(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
@@ -1655,7 +1807,8 @@ def plantillas_whatsapp_view(request):
         )
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@authentication_classes([SignedUserAuthentication])
+@permission_classes([IsAuthenticated])
 def campanas_meta_recientes(request):
     try:
         try:

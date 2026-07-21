@@ -42,6 +42,20 @@ class ExpedienteDigital(models.Model):
     asesor_ventas = models.CharField(max_length=200, blank=True, default="")
     comentarios = models.TextField(max_length=2000, blank=True, default="")
 
+    ia_pausada = models.BooleanField(default=False)
+    ia_pausada_motivo = models.CharField(max_length=120, blank=True, default="")
+    ia_pausada_at = models.DateTimeField(null=True, blank=True)
+
+    requiere_asesor = models.BooleanField(default=False)
+    motivo_requiere_asesor = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+    )
+
+    cotizacion_pendiente = models.BooleanField(default=False)
+    cotizacion_solicitada_at = models.DateTimeField(null=True, blank=True)
+
     primer_contacto_at = models.DateTimeField(null=True, blank=True, db_index=True)
     ultimo_contacto_at = models.DateTimeField(null=True, blank=True, db_index=True)
     last_read_at = models.DateTimeField(null=True, blank=True)
@@ -220,3 +234,120 @@ class MapeoFuenteMeta(models.Model):
     class Meta:
         db_table = "mapeo_fuentes_meta"
         managed = False
+
+class ConversacionIA(models.Model):
+    expediente = models.ForeignKey(
+        ExpedienteDigital,
+        on_delete=models.CASCADE,
+        related_name="conversaciones_ia_volvo",
+    )
+    numero_asesor = models.CharField(max_length=15, db_index=True)
+
+    ia_activa = models.BooleanField(default=True)
+    ia_pausada = models.BooleanField(default=False)
+    motivo_pausa = models.CharField(max_length=120, blank=True, default="")
+
+    estado_conversacion = models.CharField(
+        max_length=50,
+        blank=True,
+        default="sin_iniciar",
+    )
+    pregunta_pendiente = models.CharField(
+        max_length=80,
+        blank=True,
+        default="",
+    )
+    pregunta_pendiente_intentos = models.PositiveSmallIntegerField(default=0)
+
+    ultima_intencion = models.CharField(
+        max_length=80,
+        blank=True,
+        default="",
+    )
+    ultimo_modelo_mencionado = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+    )
+
+    resumen_conversacion = models.TextField(blank=True, default="")
+    datos_extra = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "conversacion_ia_volvo"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["expediente", "numero_asesor"],
+                name="uniq_conversacion_ia_volvo_exp_linea",
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        self.numero_asesor = normaliza_tel_mx(self.numero_asesor)
+        super().save(*args, **kwargs)
+
+
+class CatalogoVehiculos(models.Model):
+    marca = models.CharField(max_length=80, default="Volvo")
+    modelo = models.CharField(max_length=120)
+    ano = models.PositiveSmallIntegerField()
+    version = models.CharField(max_length=120, blank=True, default="")
+
+    precio_lista = models.PositiveIntegerField(null=True, blank=True)
+    precio_contado = models.PositiveIntegerField(null=True, blank=True)
+    precio_financiado = models.PositiveIntegerField(null=True, blank=True)
+
+    resumen = models.TextField(blank=True, default="")
+    ficha_tecnica = models.JSONField(default=dict, blank=True)
+    url_ficha_tecnica = models.CharField(
+        max_length=800,
+        blank=True,
+        default="",
+    )
+
+    imagenes = models.JSONField(default=list, blank=True)
+    videos = models.JSONField(default=list, blank=True)
+
+    ultima_actualizacion = models.DateField(null=True, blank=True)
+    activo = models.BooleanField(default=True)
+    creado = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "catalogo_vehiculos_volvo"
+        ordering = ["marca", "modelo", "ano", "version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["marca", "modelo", "ano", "version"],
+                name="uniq_catalogo_volvo_modelo_version",
+            )
+        ]
+
+
+class ConfiguracionIAWhatsApp(models.Model):
+    numero_asesor = models.CharField(max_length=15, unique=True)
+    activo = models.BooleanField(default=False)
+    horarios = models.JSONField(default=dict, blank=True)
+
+    identidad = models.TextField(blank=True, default="")
+    precios = models.TextField(blank=True, default="")
+    perfilamiento = models.TextField(blank=True, default="")
+    limites = models.TextField(blank=True, default="")
+    personalidad = models.TextField(blank=True, default="")
+    condiciones_fijas = models.TextField(blank=True, default="")
+    promociones_eventos = models.TextField(blank=True, default="")
+
+    actualizado_por = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+    )
+    actualizado = models.DateTimeField(auto_now=True)
+    creado = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "configuracion_ia_whatsapp_volvo"
+        ordering = ["numero_asesor"]
+
+    def save(self, *args, **kwargs):
+        self.numero_asesor = normaliza_tel_mx(self.numero_asesor)
+        super().save(*args, **kwargs)
