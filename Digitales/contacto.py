@@ -989,9 +989,8 @@ def obtener_templates_whatsapp(numero_asesor: str) -> list[dict]:
             if str(normalizada.get("status") or "").upper() != "APPROVED":
                 continue
 
-            # Solo mostramos plantillas tipo UTILITY.
             categoria = str(normalizada.get("category") or "").strip().upper()
-            if categoria != "UTILITY":
+            if categoria not in ("UTILITY", "MARKETING"):
                 continue
 
             key = normalizada.get("key") or normalizada.get("name") or ""
