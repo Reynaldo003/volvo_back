@@ -6,6 +6,7 @@ from datetime import timedelta
 import mimetypes
 import threading
 import traceback
+import unicodedata
 
 from django.conf import settings
 from django.db import close_old_connections
@@ -262,6 +263,32 @@ def _media_type_from_file(file_obj):
 
     return "document"
 
+MENSAJE_WEB_DEALER = (
+    "Hola, los contacto desde su sitio web y me gustaría recibir más información"
+)
+
+
+def _normalizar_texto_origen(texto: str) -> str:
+    texto = unicodedata.normalize("NFKD", str(texto or ""))
+    texto = "".join(
+        caracter
+        for caracter in texto
+        if not unicodedata.combining(caracter)
+    )
+    texto = texto.lower()
+    texto = "".join(
+        caracter if caracter.isalnum() else " "
+        for caracter in texto
+    )
+    return " ".join(texto.split())
+
+
+def _es_mensaje_web_dealer(texto: str) -> bool:
+    return (
+        _normalizar_texto_origen(texto)
+        == _normalizar_texto_origen(MENSAJE_WEB_DEALER)
+    )
+
 
 # ── Helpers de negocio WhatsApp ──────────────────────────────────────────────
 
@@ -285,8 +312,8 @@ def _get_or_create_cliente_y_expediente(*, tel: str, profile_name: str = "", num
     defaults = {
         "agencia": (cfg_linea.get("agencia") or "").strip(),
         "business": (cfg_linea.get("business") or "").strip(),
-        "canal_contacto": "WhatsApp",
-        "estado": "Contactado",
+        "canal_contacto": "Facebook",
+        "estado": "En espera de respuesta",
         "asesor_digital": (cfg_linea.get("asesor_digital") or "").strip(),
     }
 
@@ -648,6 +675,20 @@ def webhook(request):
                     wa_id = str(msg.get("id") or "").strip()
                     text = obtener_mensaje_whatsapp(msg)
 
+                    es_primer_mensaje_entrante = False
+
+                    if tel and numero_asesor:
+                        es_primer_mensaje_entrante = not MensajeWhatsApp.objects.filter(
+                            telefono=tel,
+                            numero_asesor=numero_asesor,
+                            direction=MensajeWhatsApp.Direccion.IN,
+                        ).exists()
+
+                    es_web_dealer = (
+                        es_primer_mensaje_entrante
+                        and _es_mensaje_web_dealer(text)
+                    )
+
                     logger.info(
                         "WEBHOOK MENSAJE VOLVO | from=%s tel=%s wa_id=%s type=%s text=%s",
                         wa_from,
@@ -671,6 +712,29 @@ def webhook(request):
                         numero_asesor=numero_asesor,
                     )
 
+                    if es_web_dealer and expediente:
+                        cambios_expediente = []
+
+                        if expediente.canal_contacto != "Web Dealer":
+                            expediente.canal_contacto = "Web Dealer"
+                            cambios_expediente.append("canal_contacto")
+
+                        if not (expediente.estado or "").strip():
+                            expediente.estado = "En espera de respuesta"
+                            cambios_expediente.append("estado")
+
+                        if cambios_expediente:
+                            cambios_expediente.append("actualizado")
+                            expediente.save(
+                                update_fields=list(dict.fromkeys(cambios_expediente))
+                            )
+
+                        logger.info(
+                            "LEAD WEB DEALER DETECTADO | tel=%s linea=%s",
+                            tel,
+                            numero_asesor,
+                        )
+
                     if not cliente or not expediente:
                         logger.warning("WEBHOOK VOLVO OMITIDO SIN CLIENTE O EXPEDIENTE | tel=%s", tel)
                         continue
@@ -691,6 +755,7 @@ def webhook(request):
                     raw_msg["display_phone_number"] = metadata.get("display_phone_number", "")
                     raw_msg["profile_name"] = profile_name
                     raw_msg["atribucion_meta"] = resultado_atribucion_meta
+                    raw_msg["origen_detectado"] = "web_dealer" if es_web_dealer else ""
 
                     mensaje_entrante, created = MensajeWhatsApp.objects.get_or_create(
                         wa_message_id=wa_id,
