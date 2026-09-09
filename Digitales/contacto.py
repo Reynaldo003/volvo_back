@@ -1013,3 +1013,93 @@ def obtener_templates_whatsapp(numero_asesor: str) -> list[dict]:
             str(item.get("language") or item.get("idioma") or "").lower(),
         ),
     )
+def _block_users_api(
+    *,
+    to: str,
+    numero_asesor: str,
+    method: str = "POST",
+) -> dict:
+    to = normaliza_tel_mx(to)
+    numero_asesor = normaliza_tel_mx(numero_asesor)
+
+    if not to:
+        raise ValueError("Falta número de cliente para bloquear.")
+
+    if not numero_asesor:
+        raise ValueError("Falta numero_asesor.")
+
+    cfg = obtener_config_linea(numero_asesor=numero_asesor)
+
+    phone_number_id = str(cfg.get("phone_number_id") or "").strip()
+
+    if not phone_number_id:
+        raise ValueError("La línea no tiene phone_number_id configurado.")
+
+    url = (
+        f"https://graph.facebook.com/"
+        f"{GRAPH_VERSION}/{phone_number_id}/block_users"
+    )
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "block_users": [
+            {
+                "user": to,
+            }
+        ],
+    }
+
+    method = str(method or "POST").upper().strip()
+
+    if method == "DELETE":
+        response = requests.delete(
+            url,
+            headers=_json_headers(cfg),
+            json=payload,
+            timeout=20,
+        )
+    else:
+        response = requests.post(
+            url,
+            headers=_json_headers(cfg),
+            json=payload,
+            timeout=20,
+        )
+
+    data = _meta_error(response)
+
+    if response.status_code >= 400:
+        raise MetaAPIError(
+            status_code=response.status_code,
+            error_body=data,
+            retryable=_es_error_meta_reintentable(
+                response.status_code,
+                data,
+            ),
+            attempts=1,
+            message="Meta rechazó la operación de bloqueo.",
+        )
+
+    return data
+
+
+def bloquear_usuario_whatsapp(
+    to: str,
+    numero_asesor: str,
+) -> dict:
+    return _block_users_api(
+        to=to,
+        numero_asesor=numero_asesor,
+        method="POST",
+    )
+
+
+def desbloquear_usuario_whatsapp(
+    to: str,
+    numero_asesor: str,
+) -> dict:
+    return _block_users_api(
+        to=to,
+        numero_asesor=numero_asesor,
+        method="DELETE",
+    )

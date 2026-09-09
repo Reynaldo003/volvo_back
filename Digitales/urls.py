@@ -21,6 +21,8 @@ from .views import (
     plantillas_whatsapp_view,
     privacidad_meta_view,
     webhook,
+    bloquear_contacto_whatsapp_view,
+    desbloquear_contacto_whatsapp_view,
 )
 from .plantillas_views import (
     analizar_plantilla_whatsapp_view,
@@ -50,6 +52,8 @@ urlpatterns = [
     path("chats/", chats_list),
     path("chats/mark-read/", mark_read_view),
     path("chats/mark-unread/", mark_unread_view),
+    path("chats/bloquear/",bloquear_contacto_whatsapp_view,),
+    path("chats/desbloquear/",desbloquear_contacto_whatsapp_view,),
     path("contacto/", contacto_por_telefono),
     path("contacto/updates/", contacto_updates),
 
