@@ -13,10 +13,11 @@ from django.db import close_old_connections
 from django.db.models import Max, Q
 from django.http import HttpResponse
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime
+from django.utils.dateparse import parse_date, parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 
 from rest_framework import status, viewsets
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import api_view, authentication_classes, parser_classes, permission_classes
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -66,11 +67,32 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 
+class ProspectosPagination(PageNumberPagination):
+    page_size = 200
+    page_size_query_param = "page_size"
+    max_page_size = 1000
+
+
 class ProspectosViewSet(viewsets.ModelViewSet):
     authentication_classes = [SignedUserAuthentication]
     permission_classes = [IsAuthenticated]
     serializer_class = ProspectoSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
+    pagination_class = ProspectosPagination
+
+    def paginate_queryset(self, queryset):
+        """
+        Compatibilidad temporal:
+        - Si el frontend manda page/page_size -> pagina en backend.
+        - Si no manda esos parámetros -> conserva la respuesta antigua completa.
+        """
+        if (
+            "page" not in self.request.query_params
+            and "page_size" not in self.request.query_params
+        ):
+            return None
+
+        return super().paginate_queryset(queryset)
 
     def get_queryset(self):
         queryset = (
@@ -85,6 +107,22 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         estado = (self.request.query_params.get("estado") or "").strip()
         asesor_digital = (self.request.query_params.get("asesor_digital") or "").strip()
         asesor_ventas = (self.request.query_params.get("asesor_ventas") or "").strip()
+        business = (self.request.query_params.get("business") or "").strip()
+
+        fecha_registro_desde = parse_date(
+            (self.request.query_params.get("fecha_registro_desde") or "").strip()
+        )
+        fecha_registro_hasta = parse_date(
+            (self.request.query_params.get("fecha_registro_hasta") or "").strip()
+        )
+        fecha_contacto_desde = parse_date(
+            (self.request.query_params.get("fecha_contacto_desde") or "").strip()
+        )
+        fecha_contacto_hasta = parse_date(
+            (self.request.query_params.get("fecha_contacto_hasta") or "").strip()
+        )
+        sort_key = (self.request.query_params.get("sort_key") or "").strip()
+        sort_dir = (self.request.query_params.get("sort_dir") or "asc").strip().lower()
 
         if search:
             queryset = queryset.filter(
@@ -116,15 +154,50 @@ class ProspectosViewSet(viewsets.ModelViewSet):
 
         if agencia:
             queryset = queryset.filter(agencia__iexact=agencia)
+
         if estado:
             queryset = queryset.filter(estado__iexact=estado)
+
+        if business:
+            queryset = queryset.filter(business__iexact=business)
+
         if asesor_digital:
             queryset = queryset.filter(asesor_digital__icontains=asesor_digital)
+
         if asesor_ventas:
             queryset = queryset.filter(asesor_ventas__icontains=asesor_ventas)
 
-        return queryset
+        if fecha_registro_desde:
+            queryset = queryset.filter(creado__date__gte=fecha_registro_desde)
 
+        if fecha_registro_hasta:
+            queryset = queryset.filter(creado__date__lte=fecha_registro_hasta)
+
+        if fecha_contacto_desde:
+            queryset = queryset.filter(
+                ultimo_contacto_at__date__gte=fecha_contacto_desde
+            )
+
+        if fecha_contacto_hasta:
+            queryset = queryset.filter(
+                ultimo_contacto_at__date__lte=fecha_contacto_hasta
+            )
+        sort_fields = {
+            "agencia": "agencia",
+            "fecha_reclamacion": "creado",
+            "ultimo_contacto_at": "ultimo_contacto_at",
+        }
+
+        sort_field = sort_fields.get(sort_key)
+
+        if sort_field:
+            prefix = "-" if sort_dir == "desc" else ""
+            queryset = queryset.order_by(
+                f"{prefix}{sort_field}",
+                "-id",
+            )
+
+        return queryset
 
 # ── Helpers de fechas compatibles con USE_TZ=False ───────────────────────────
 
