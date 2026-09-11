@@ -1020,35 +1020,121 @@ def chats_list(request):
     try:
         cfg, numero_asesor = _get_cfg_request(request)
     except Exception as exc:
-        return Response({"ok": False, "error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"ok": False, "error": str(exc)},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
-    limit = _int_param(request, "limit", default=200, min_value=1, max_value=300)
-    search = str(request.query_params.get("search") or "").strip()
+    # Compatibilidad:
+    # - sin paginado=1 conserva la respuesta antigua
+    # - con paginado=1 devuelve bloques pequeños para infinite scroll
+    paginado = (
+        str(request.query_params.get("paginado", "0") or "")
+        .strip()
+        .casefold()
+        in {"1", "true", "yes", "si", "sí", "on"}
+    )
 
-    base_qs = MensajeWhatsApp.objects.filter(numero_asesor=numero_asesor)
+    if paginado:
+        limit = _int_param(
+            request,
+            "limit",
+            default=30,
+            min_value=10,
+            max_value=60,
+        )
+    else:
+        limit = _int_param(
+            request,
+            "limit",
+            default=200,
+            min_value=1,
+            max_value=300,
+        )
+
+    search = str(
+        request.query_params.get("search")
+        or request.query_params.get("q")
+        or ""
+    ).strip()[:120]
+
+    before = (
+        _parse_dt_param(
+            request.query_params.get("before", "")
+        )
+        if paginado
+        else None
+    )
+
+    before_tel = (
+        normaliza_tel_mx(
+            request.query_params.get("before_tel", "")
+        )
+        if paginado
+        else ""
+    )
+
+    base_qs = MensajeWhatsApp.objects.filter(
+        numero_asesor=numero_asesor
+    )
 
     if search:
         telefono_search = normaliza_tel_mx(search)
+
         base_qs = base_qs.filter(
-            Q(telefono__icontains=telefono_search or search)
+            Q(
+                telefono__icontains=(
+                    telefono_search or search
+                )
+            )
             | Q(cliente__nombre__icontains=search)
             | Q(body__icontains=search)
         )
 
-    rows = (
+    rows_qs = (
         base_qs
         .values("telefono")
         .annotate(last_created=Max("created_at"))
-        .order_by("-last_created")[:limit]
     )
+
+    # Cursor para obtener la siguiente tanda sin volver
+    # a descargar las conversaciones anteriores.
+    if paginado and before:
+        cursor_filter = Q(last_created__lt=before)
+
+        if before_tel:
+            cursor_filter |= Q(
+                last_created=before,
+                telefono__lt=before_tel,
+            )
+
+        rows_qs = rows_qs.filter(cursor_filter)
+
+    consulta = rows_qs.order_by(
+        "-last_created",
+        "-telefono",
+    )
+
+    if paginado:
+        pagina = list(consulta[: limit + 1])
+        has_more = len(pagina) > limit
+        rows = pagina[:limit]
+    else:
+        rows = list(consulta[:limit])
+        has_more = False
 
     salida = []
 
     for row in rows:
         telefono = row["telefono"]
+
         ultimo = (
             MensajeWhatsApp.objects
-            .filter(telefono=telefono, numero_asesor=numero_asesor, created_at=row["last_created"])
+            .filter(
+                telefono=telefono,
+                numero_asesor=numero_asesor,
+                created_at=row["last_created"],
+            )
             .select_related("cliente")
             .order_by("-id")
             .first()
@@ -1057,17 +1143,58 @@ def chats_list(request):
         if not ultimo:
             continue
 
-        cliente = ultimo.cliente or ClienteComercial.objects.filter(telefono=telefono).first()
-        expediente = ExpedienteDigital.objects.filter(cliente=cliente).first() if cliente else None
+        cliente = (
+            ultimo.cliente
+            or ClienteComercial.objects
+            .filter(telefono=telefono)
+            .first()
+        )
+
+        expediente = (
+            ExpedienteDigital.objects
+            .filter(cliente=cliente)
+            .first()
+            if cliente
+            else None
+        )
+
+        # El estado completo de IA puede ser costoso.
+        # En la lista paginada se obtiene al abrir el chat.
+        ia_estado = None
+
+        if not paginado and expediente:
+            ia_estado = obtener_estado_ia_conversacion(
+                numero_asesor=numero_asesor,
+                expediente=expediente,
+            )
 
         salida.append(
             {
-                "id": expediente.id if expediente else telefono,
+                "id": (
+                    expediente.id
+                    if expediente
+                    else telefono
+                ),
                 "telefono": telefono,
-                "nombre": (cliente.nombre if cliente else "") or "Prospecto",
-                "agencia": expediente.agencia if expediente else cfg.get("agencia", ""),
-                "linea": expediente.business if expediente else cfg.get("business", ""),
-                "estado": expediente.estado if expediente else "",
+                "nombre": (
+                    (cliente.nombre if cliente else "")
+                    or "Prospecto"
+                ),
+                "agencia": (
+                    expediente.agencia
+                    if expediente
+                    else cfg.get("agencia", "")
+                ),
+                "linea": (
+                    expediente.business
+                    if expediente
+                    else cfg.get("business", "")
+                ),
+                "estado": (
+                    expediente.estado
+                    if expediente
+                    else ""
+                ),
                 "whatsapp_bloqueado": (
                     bool(expediente.whatsapp_bloqueado)
                     if expediente
@@ -1078,17 +1205,64 @@ def chats_list(request):
                     if expediente
                     else ""
                 ),
-                "unread": _unread_count(expediente, numero_asesor) if expediente else 0,
+                "unread": (
+                    _unread_count(
+                        expediente,
+                        numero_asesor,
+                    )
+                    if expediente
+                    else 0
+                ),
                 "last_text": ultimo.body or "",
-                "last_time": _format_time(ultimo.created_at),
-                "last_created_at": _iso_or_none(ultimo.created_at),
+                "last_time": _format_time(
+                    ultimo.created_at
+                ),
+                "last_created_at": _iso_or_none(
+                    ultimo.created_at
+                ),
                 "numero_asesor": numero_asesor,
-                "ia_estado": obtener_estado_ia_conversacion(numero_asesor=numero_asesor, expediente=expediente) if expediente else None,
+                "ia_estado": ia_estado,
+                "ia_pausada": (
+                    bool(expediente.ia_pausada)
+                    if expediente
+                    else False
+                ),
             }
         )
 
-    return Response(salida, status=status.HTTP_200_OK)
+    # Respuesta antigua para no romper ningún consumidor existente.
+    if not paginado:
+        return Response(
+            salida,
+            status=status.HTTP_200_OK,
+        )
 
+    ultimo_cursor = rows[-1] if rows else None
+
+    return Response(
+        {
+            "ok": True,
+            "results": salida,
+            "paginacion": {
+                "limit": limit,
+                "has_more": has_more,
+                "before": (
+                    _iso_or_none(
+                        ultimo_cursor["last_created"]
+                    )
+                    if ultimo_cursor
+                    else None
+                ),
+                "before_tel": (
+                    ultimo_cursor["telefono"]
+                    if ultimo_cursor
+                    else ""
+                ),
+                "query": search,
+            },
+        },
+        status=status.HTTP_200_OK,
+    )
 
 def _safe_raw_dict(raw):
     if isinstance(raw, dict):
