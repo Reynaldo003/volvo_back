@@ -65,6 +65,7 @@ INSTALLED_APPS = [
     "checklist_entrega",
     "checklist_general",
     "meta_ads",
+    "salesforce",
 ]
 
 
