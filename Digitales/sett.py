@@ -26,9 +26,9 @@ def meta_ads_linea(cfg: dict) -> dict:
 
 META_ADS_ACCESS_TOKEN = ""
 
-whatsapp_url_mariana = 'https://graph.facebook.com/v22.0/1209013795622558/messages'
+whatsapp_url_jaret = 'https://graph.facebook.com/v22.0/1209013795622558/messages'
 whatsapp_numero_default = "522211092815"
-whatsapp_numero_mariana = "522211092815"
+whatsapp_numero_jaret = "522211092815"
 WHATSAPP_LINES = {
     #whatsapp_numero_default: {
     #    "key": "default",
@@ -43,13 +43,13 @@ WHATSAPP_LINES = {
     #    "template_names": ["saludo_seguimiento", "informacion_seguimiento"],
     #},
 
-    whatsapp_numero_mariana: {
-        "key": "mariana",
+    whatsapp_numero_jaret: {
+        "key": "jaret",
         "phone_number_id": "1209013795622558",
         "waba_id": "1520374786158708",
         "access_token": whatsapp_token,
-        "asesor_digital": "Mariana Tlamani",
-        "messages_url": whatsapp_url_mariana,
+        "asesor_digital": "Amauri Jaret Pérez Núñez",
+        "messages_url": whatsapp_url_jaret,
         "agencia": "Volvo",
         "business": "Nuevos",
         "responder_ia": False,
