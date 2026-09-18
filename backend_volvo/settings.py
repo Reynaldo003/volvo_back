@@ -51,7 +51,6 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "presupuestos",
 
     # Terceros
     "rest_framework",
@@ -148,10 +147,6 @@ DATABASES = {
     },
 }
 
-DATABASES["sqlserver_presupuestos"] = {
-    **DATABASES["sqlserver_meta"],
-    "NAME": "TDSQL_VW",
-}
 
 # ============================================================
 # VALIDACIÓN DE CONTRASEÑAS
