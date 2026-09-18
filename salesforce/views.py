@@ -4,6 +4,7 @@ from datetime import date, timedelta
 
 from django.db import DatabaseError, connections
 from rest_framework import viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -88,6 +89,72 @@ class ConsultaSalesforceViewSet(viewsets.ViewSet):
 
         where = " WHERE " + " AND ".join(condiciones) if condiciones else ""
         return where, valores
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="opciones-filtros",
+    )
+    def opciones_filtros(self, request):
+        """
+        Devuelve los valores distintos reales de Salesforce para los
+        filtros exactos de cada listado.
+        """
+        opciones = {}
+
+        try:
+            with connections["sqlserver_meta"].cursor() as cursor:
+                for parametro, columna in self.filtros_exactos.items():
+                    columna_sql = f"[{columna}]"
+
+                    cursor.execute(
+                        f"""
+                        SELECT DISTINCT
+                            LTRIM(
+                                RTRIM(
+                                    CAST(
+                                        {columna_sql}
+                                        AS NVARCHAR(4000)
+                                    )
+                                )
+                            ) AS valor
+                        FROM {self.tabla}
+                        WHERE {columna_sql} IS NOT NULL
+                        AND LTRIM(
+                                RTRIM(
+                                    CAST(
+                                        {columna_sql}
+                                        AS NVARCHAR(4000)
+                                    )
+                                )
+                            ) <> ''
+                        ORDER BY valor
+                        """
+                    )
+
+                    opciones[parametro] = [
+                        fila[0]
+                        for fila in cursor.fetchall()
+                        if fila[0]
+                    ]
+
+        except DatabaseError:
+            logger.exception(
+                "Error consultando opciones Salesforce: %s",
+                self.tabla,
+            )
+
+            return Response(
+                {
+                    "detail": (
+                        "No fue posible consultar las opciones "
+                        "de filtros de Salesforce."
+                    )
+                },
+                status=503,
+            )
+
+        return Response(opciones)
 
     def list(self, request):
         parametros = {
