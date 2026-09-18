@@ -387,7 +387,7 @@ def _get_or_create_cliente_y_expediente(*, tel: str, profile_name: str = "", num
     defaults = {
         "agencia": (cfg_linea.get("agencia") or "").strip(),
         "business": (cfg_linea.get("business") or "").strip(),
-        "canal_contacto": "Facebook",
+        "canal_contacto": "Whatsapp",
         "estado": "En espera de respuesta",
         "asesor_digital": (cfg_linea.get("asesor_digital") or "").strip(),
     }
